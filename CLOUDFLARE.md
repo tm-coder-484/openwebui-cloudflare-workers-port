@@ -100,6 +100,13 @@ Node 22, so `npm ci` fails outright on a newer build image. If your build errors
 with an `EBADENGINE`/unsupported-engine message, set a `NODE_VERSION` build
 variable to `22`.
 
+If the build runs out of memory, add a build variable
+`NODE_OPTIONS` = `--max-old-space-size=4096` (6144 if that is not enough). The
+SvelteKit frontend is large: measured locally it peaks around 5.6 GB of RSS.
+`build:workers` already passes `--sourcemap false`, which is worth 1.6 GB and
+20 seconds over a plain `vite build` — the maps would only be discarded by
+`.assetsignore` on upload anyway, so do not re-enable them for this build.
+
 **4. Deploy.** The first build takes a few minutes — most of it is the frontend.
 
 D1, KV and R2 are **created for you**: the bindings in `workers/wrangler.toml`
