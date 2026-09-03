@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloudflare Workers CI — typecheck, unit tests, and a dry-run deploy build
+# Runs on pushes and PRs that touch the Workers backend
+# ─────────────────────────────────────────────────────────────────────────────
+name: Workers Backend
+
+on:
+  push:
+    branches: [main, dev]
+    paths: ['workers/**', '.github/workflows/workers.yaml']
+  pull_request:
+    branches: [main, dev]
+    paths: ['workers/**', '.github/workflows/workers.yaml']
+
+concurrency:
+  group: workers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Typecheck and vitest ──────────────────────────────────────────────────
+  test:
+    name: Typecheck & Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: workers
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Install dependencies (frozen lockfile)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Execute test suite
+        run: npm test
+
+  # ── Prove the Worker bundles and the D1 schema applies ───────────────────
+  build:
+    name: Bundle & Migrate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: workers
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+
+      - name: Install dependencies (frozen lockfile)
+        run: npm ci
+
+      # The assets directory only exists after a frontend build; a placeholder
+      # is enough to prove the Worker itself bundles.
+      - name: Stub the assets directory
+        run: mkdir -p ../build && echo '<!doctype html>' > ../build/index.html
+
+      - name: Apply D1 migrations to a local database
+        run: npx wrangler d1 migrations apply open-webui --local
+
+      - name: Dry-run deploy (bundles the Worker)
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-bundle

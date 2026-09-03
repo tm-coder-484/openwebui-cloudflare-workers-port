@@ -1,0 +1,84 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "open-webui"
+main = "src/index.ts"
+compatibility_date = "2024-12-05"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# The SvelteKit frontend (built with `npm run build` in the repo root) is served
+# straight from Workers Static Assets. API traffic is handled by the Worker first;
+# everything else falls through to the SPA shell.
+[assets]
+directory = "../build"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = [
+  "/api/*",
+  "/ollama/*",
+  "/openai/*",
+  "/ws/*",
+  "/oauth/*",
+  "/health*",
+  "/cache/*"
+]
+
+# Runs scheduled automations. Cloudflare's minimum granularity is one minute.
+[triggers]
+crons = ["* * * * *"]
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "open-webui"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "CACHE"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "open-webui-files"
+
+[[durable_objects.bindings]]
+name = "SOCKET"
+class_name = "SocketHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SocketHub"]
+
+# Workers AI powers the built-in model provider, Whisper transcription and RAG
+# embeddings. It is commented out so `wrangler dev` runs with no Cloudflare
+# credentials at all; uncomment it (and run `wrangler login`) to get a model
+# list without bringing your own API key. It works the same in production.
+# [ai]
+# binding = "AI"
+
+# Optional: semantic search for knowledge bases. Without it, retrieval falls
+# back to keyword scoring over the chunks stored in D1.
+#   wrangler vectorize create open-webui --dimensions=768 --metric=cosine
+# [[vectorize]]
+# binding = "VECTORIZE"
+# index_name = "open-webui"
+
+[vars]
+WEBUI_NAME = "Open WebUI"
+WEBUI_URL = "http://localhost:8787"
+ENABLE_SIGNUP = "true"
+ENABLE_LOGIN_FORM = "true"
+DEFAULT_USER_ROLE = "pending"
+ENABLE_WORKERS_AI = "true"
+
+# NVIDIA NIM is the primary model provider. The hosted catalogue lives at
+# build.nvidia.com; point this at your own host to use a self-hosted NIM
+# microservice instead (both speak the OpenAI API).
+ENABLE_NVIDIA_API = "true"
+NVIDIA_API_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
+# Set with `wrangler secret put`:
+#   WEBUI_SECRET_KEY   - JWT signing key (REQUIRED in production)
+#   NVIDIA_API_KEY     - NVIDIA NIM key from build.nvidia.com (starts with nvapi-)
+#   OPENAI_API_KEY     - comma separated keys, matched positionally with OPENAI_API_BASE_URLS
+#   OPENAI_API_BASE_URL

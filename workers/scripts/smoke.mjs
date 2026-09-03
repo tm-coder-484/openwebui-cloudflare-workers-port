@@ -1,0 +1,630 @@
+/**
+ * End-to-end smoke test against a running deployment.
+ *
+ *   node scripts/smoke.mjs                          # http://127.0.0.1:8787
+ *   node scripts/smoke.mjs https://my-worker.dev    # a deployed Worker
+ *
+ * Signs up (or signs in) as a throwaway account and exercises every major API
+ * group, including a streamed completion delivered over Socket.IO. Exits
+ * non-zero if any check fails.
+ */
+
+const BASE = (process.argv[2] ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
+const EMAIL = process.env.SMOKE_EMAIL ?? `smoke-${Date.now()}@example.com`;
+const PASSWORD = process.env.SMOKE_PASSWORD ?? 'smoke-test-password';
+const NAME = 'Smoke Test';
+
+let token = '';
+let passed = 0;
+const failures = [];
+
+const check = async (label, fn) => {
+	try {
+		await fn();
+		passed += 1;
+		console.log(`  ✓ ${label}`);
+	} catch (error) {
+		failures.push(`${label}: ${error.message}`);
+		console.log(`  ✗ ${label} — ${error.message}`);
+	}
+};
+
+const assert = (condition, message) => {
+	if (!condition) throw new Error(message);
+};
+
+async function api(path, options = {}) {
+	const response = await fetch(`${BASE}${path}`, {
+		...options,
+		headers: {
+			'Content-Type': 'application/json',
+			...(token ? { Authorization: `Bearer ${token}` } : {}),
+			...(options.headers ?? {})
+		}
+	});
+	const text = await response.text();
+	let body;
+	try {
+		body = text ? JSON.parse(text) : null;
+	} catch {
+		body = text;
+	}
+	if (!response.ok) {
+		throw new Error(
+			`${options.method ?? 'GET'} ${path} -> ${response.status} ${text.slice(0, 200)}`
+		);
+	}
+	return body;
+}
+
+console.log(`Open WebUI smoke test against ${BASE}\n`);
+
+// --- Public surface -------------------------------------------------------
+console.log('config');
+const config = await api('/api/config');
+await check('GET /api/config reports a version', async () =>
+	assert(typeof config.version === 'string', 'no version')
+);
+await check('GET /api/version', async () => {
+	const version = await api('/api/version');
+	assert(version.version === config.version, 'version mismatch with /api/config');
+});
+
+// --- Auth -----------------------------------------------------------------
+console.log('\nauth');
+await check('sign up (or sign in) a test account', async () => {
+	const signup = await api('/api/v1/auths/signup', {
+		method: 'POST',
+		body: JSON.stringify({ name: NAME, email: EMAIL, password: PASSWORD })
+	}).catch(async () =>
+		api('/api/v1/auths/signin', {
+			method: 'POST',
+			body: JSON.stringify({ email: EMAIL, password: PASSWORD })
+		})
+	);
+	assert(signup.token, 'no token returned');
+	token = signup.token;
+});
+
+const session = await api('/api/v1/auths/');
+await check('GET /api/v1/auths/ returns the session user', async () =>
+	assert(session.email === EMAIL, `unexpected session email ${session.email}`)
+);
+
+const isAdmin = session.role === 'admin';
+if (session.role === 'pending') {
+	console.log(
+		'\nThe test account was created but is pending activation, which is the ' +
+			'default for signups after the first admin exists.\nRe-run with an ' +
+			'activated account:\n\n  SMOKE_EMAIL=you@example.com SMOKE_PASSWORD=... node scripts/smoke.mjs' +
+			`${BASE === 'http://127.0.0.1:8787' ? '' : ' ' + BASE}\n`
+	);
+	process.exit(1);
+}
+if (!isAdmin) {
+	console.log(`  ! account role is "${session.role}" — admin-only checks are skipped`);
+}
+
+// --- Chats ----------------------------------------------------------------
+console.log('\nchats');
+let chatId = '';
+await check('create a chat', async () => {
+	const chat = await api('/api/v1/chats/new', {
+		method: 'POST',
+		body: JSON.stringify({
+			chat: { title: 'Smoke chat', models: ['none'], history: { currentId: null, messages: {} } }
+		})
+	});
+	chatId = chat.id;
+	assert(chatId, 'no chat id');
+});
+await check('list chats', async () => {
+	const chats = await api('/api/v1/chats/?page=1');
+	assert(
+		Array.isArray(chats) && chats.some((chat) => chat.id === chatId),
+		'chat missing from list'
+	);
+});
+await check('tag, pin and archive a chat', async () => {
+	await api(`/api/v1/chats/${chatId}/tags`, {
+		method: 'POST',
+		body: JSON.stringify({ name: 'smoke' })
+	});
+	await api(`/api/v1/chats/${chatId}/pin`, { method: 'POST' });
+	await api(`/api/v1/chats/${chatId}/archive`, { method: 'POST' });
+	const chat = await api(`/api/v1/chats/${chatId}`);
+	assert(chat.archived === true, 'chat not archived');
+	assert((chat.meta?.tags ?? []).includes('smoke'), 'tag not stored');
+});
+await check('share and unshare a chat', async () => {
+	const shared = await api(`/api/v1/chats/${chatId}/share`, { method: 'POST' });
+	assert(shared.share_id, 'no share id');
+	const publicChat = await api(`/api/v1/chats/share/${shared.share_id}`);
+	assert(publicChat.id === chatId, 'shared chat mismatch');
+	await api(`/api/v1/chats/${chatId}/share`, { method: 'DELETE' });
+});
+
+// --- Folders --------------------------------------------------------------
+console.log('\nfolders');
+let folderId = '';
+await check('create a folder and move the chat into it', async () => {
+	const folder = await api('/api/v1/folders/', {
+		method: 'POST',
+		body: JSON.stringify({ name: `Smoke ${Date.now()}` })
+	});
+	folderId = folder.id;
+	await api(`/api/v1/chats/${chatId}/folder`, {
+		method: 'POST',
+		body: JSON.stringify({ folder_id: folderId })
+	});
+	const chats = await api(`/api/v1/chats/folder/${folderId}`);
+	assert(Array.isArray(chats), 'folder listing is not an array');
+});
+
+// --- Files and knowledge --------------------------------------------------
+console.log('\nfiles & knowledge');
+let fileId = '';
+await check('upload a text file', async () => {
+	const form = new FormData();
+	form.append(
+		'file',
+		new Blob(['Cloudflare Workers run JavaScript at the edge.'], { type: 'text/plain' }),
+		'smoke.txt'
+	);
+	const response = await fetch(`${BASE}/api/v1/files/`, {
+		method: 'POST',
+		headers: { Authorization: `Bearer ${token}` },
+		body: form
+	});
+	assert(response.ok, `upload failed: ${response.status}`);
+	const file = await response.json();
+	fileId = file.id;
+	assert(fileId, 'no file id');
+});
+await check('read the file back', async () => {
+	const response = await fetch(`${BASE}/api/v1/files/${fileId}/content`, {
+		headers: { Authorization: `Bearer ${token}` }
+	});
+	const text = await response.text();
+	assert(text.includes('Cloudflare Workers'), 'file content mismatch');
+});
+if (isAdmin || session.permissions?.workspace?.knowledge) {
+	await check('create a knowledge base and attach the file', async () => {
+		const knowledge = await api('/api/v1/knowledge/create', {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Smoke KB', description: 'smoke test' })
+		});
+		await api(`/api/v1/knowledge/${knowledge.id}/file/add`, {
+			method: 'POST',
+			body: JSON.stringify({ file_id: fileId })
+		});
+		const files = await api(`/api/v1/knowledge/${knowledge.id}/files`);
+		assert(files.length === 1, 'file not attached');
+		const search = await api('/api/v1/retrieval/query/collection', {
+			method: 'POST',
+			body: JSON.stringify({ collection_names: [knowledge.id], query: 'edge javascript', k: 3 })
+		});
+		assert((search.documents?.[0] ?? []).length > 0, 'retrieval returned nothing');
+	});
+}
+
+// --- Notes and memories ---------------------------------------------------
+console.log('\nnotes & memories');
+await check('create and update a note', async () => {
+	const note = await api('/api/v1/notes/create', {
+		method: 'POST',
+		body: JSON.stringify({ title: 'Smoke note', data: { content: { md: 'hello' } } })
+	});
+	const updated = await api(`/api/v1/notes/${note.id}/update`, {
+		method: 'POST',
+		body: JSON.stringify({ title: 'Smoke note edited' })
+	});
+	assert(updated.title === 'Smoke note edited', 'note not updated');
+	await api(`/api/v1/notes/${note.id}/delete`, { method: 'DELETE' });
+});
+await check('store and query a memory', async () => {
+	await api('/api/v1/memories/add', {
+		method: 'POST',
+		body: JSON.stringify({ content: 'The smoke test likes Durable Objects.' })
+	});
+	const result = await api('/api/v1/memories/query', {
+		method: 'POST',
+		body: JSON.stringify({ content: 'durable objects', k: 3 })
+	});
+	assert((result.documents?.[0] ?? []).length > 0, 'memory query returned nothing');
+});
+
+// --- Channels (admin only: creating a channel is an admin action) ---------
+if (isAdmin) {
+	console.log('\nchannels');
+	await check('create a channel, post a message, and receive it over the socket', async () => {
+		const channel = await api('/api/v1/channels/create', {
+			method: 'POST',
+			body: JSON.stringify({ name: `smoke-${Date.now()}`, description: 'smoke test' })
+		});
+		const socket = await connectSocket(token);
+		try {
+			const delivered = socket.waitForChannel(channel.id);
+			const message = await api(`/api/v1/channels/${channel.id}/messages/post`, {
+				method: 'POST',
+				body: JSON.stringify({ content: 'hello from the smoke test' })
+			});
+			assert(message.id, 'message was not created');
+			const event = await delivered;
+			assert(event?.data?.data?.content === 'hello from the smoke test', 'socket payload mismatch');
+
+			const messages = await api(`/api/v1/channels/${channel.id}/messages?skip=0&limit=10`);
+			assert(messages.length === 1, 'message not listed');
+		} finally {
+			socket.close();
+			await api(`/api/v1/channels/${channel.id}/delete`, { method: 'DELETE' }).catch(() => {});
+		}
+	});
+}
+
+// --- Models and completions ----------------------------------------------
+console.log('\nmodels & completions');
+const models = await api('/api/models').catch(() => ({ data: [] }));
+await check('list models', async () => assert(Array.isArray(models.data), 'no model list'));
+
+if (models.data?.length) {
+	const modelId = models.data[0].id;
+	await check(`stream a completion from ${modelId}`, async () => {
+		const socket = await connectSocket(token);
+		try {
+			const messageId = crypto.randomUUID();
+			const userMessageId = crypto.randomUUID();
+			const done = socket.waitFor(messageId);
+			const response = await api('/api/chat/completions', {
+				method: 'POST',
+				body: JSON.stringify({
+					stream: true,
+					model: modelId,
+					messages: [{ role: 'user', content: 'Reply with a short greeting.' }],
+					id: messageId,
+					parent_id: null,
+					session_id: socket.sid,
+					user_message: {
+						id: userMessageId,
+						parentId: null,
+						childrenIds: [],
+						role: 'user',
+						content: 'Reply with a short greeting.'
+					},
+					background_tasks: { title_generation: true }
+				})
+			});
+			assert(response.status === true, 'completion was not accepted');
+			assert(Array.isArray(response.task_ids) && response.task_ids.length, 'no task id returned');
+			const content = await done;
+			assert(content.trim().length > 0, 'no tokens streamed');
+		} finally {
+			socket.close();
+		}
+	});
+	// Two models answering the same prompt write into one chat document
+	// concurrently — this catches regressions in the atomic message merge.
+	await check('run two models side by side without losing either answer', async () => {
+		const socket = await connectSocket(token);
+		try {
+			const first = crypto.randomUUID();
+			const second = crypto.randomUUID();
+			const userMessageId = crypto.randomUUID();
+			const secondModelId = models.data[1]?.id ?? modelId;
+			const bothDone = Promise.all([socket.waitFor(first), socket.waitFor(second)]);
+
+			const response = await api('/api/chat/completions', {
+				method: 'POST',
+				body: JSON.stringify({
+					stream: true,
+					model: modelId,
+					messages: [{ role: 'user', content: 'Say hello twice.' }],
+					message_ids: [
+						{ model_id: modelId, message_id: first },
+						{ model_id: secondModelId, message_id: second }
+					],
+					parent_id: null,
+					session_id: socket.sid,
+					user_message: {
+						id: userMessageId,
+						parentId: null,
+						childrenIds: [],
+						role: 'user',
+						content: 'Say hello twice.'
+					},
+					background_tasks: {}
+				})
+			});
+			assert(response.task_ids.length === 2, 'expected two tasks');
+			await bothDone;
+
+			const chat = await api(`/api/v1/chats/${response.chat_id}`);
+			const stored = Object.values(chat.chat.history.messages).filter(
+				(message) => message.role === 'assistant'
+			);
+			assert(stored.length === 2, `expected 2 assistant messages, got ${stored.length}`);
+			for (const message of stored) {
+				assert((message.content ?? '').length > 0, `message ${message.id} lost its content`);
+			}
+			await api(`/api/v1/chats/${response.chat_id}`, { method: 'DELETE' });
+		} finally {
+			socket.close();
+		}
+	});
+} else {
+	console.log('  ! no models configured — completion check skipped');
+}
+
+// --- Retrieval in a completion -------------------------------------------
+if (fileId && models.data?.length) {
+	console.log('\nfile context');
+	await check('attach a file to a completion and receive citations', async () => {
+		const socket = await connectSocket(token);
+		try {
+			const messageId = crypto.randomUUID();
+			const done = socket.waitFor(messageId);
+			await api('/api/chat/completions', {
+				method: 'POST',
+				body: JSON.stringify({
+					stream: true,
+					model: models.data[0].id,
+					messages: [{ role: 'user', content: 'What runs at the edge?' }],
+					files: [{ type: 'file', id: fileId, name: 'smoke.txt' }],
+					id: messageId,
+					parent_id: null,
+					session_id: socket.sid,
+					user_message: {
+						id: crypto.randomUUID(),
+						parentId: null,
+						childrenIds: [],
+						role: 'user',
+						content: 'What runs at the edge?'
+					},
+					background_tasks: {}
+				})
+			});
+			await done;
+			assert(socket.sourcesSeen() > 0, 'no source events were emitted');
+		} finally {
+			socket.close();
+		}
+	});
+}
+
+// --- Admin ----------------------------------------------------------------
+if (isAdmin) {
+	console.log('\nadmin');
+	await check('read and write admin config', async () => {
+		const before = await api('/api/v1/auths/admin/config');
+		await api('/api/v1/auths/admin/config', {
+			method: 'POST',
+			body: JSON.stringify({
+				...before,
+				ENABLE_COMMUNITY_SHARING: !before.ENABLE_COMMUNITY_SHARING
+			})
+		});
+		const after = await api('/api/v1/auths/admin/config');
+		assert(
+			after.ENABLE_COMMUNITY_SHARING === !before.ENABLE_COMMUNITY_SHARING,
+			'config did not persist'
+		);
+		await api('/api/v1/auths/admin/config', { method: 'POST', body: JSON.stringify(before) });
+	});
+	await check('list users', async () => {
+		const users = await api('/api/v1/users/?page=1');
+		assert(Array.isArray(users.users), 'no user list');
+	});
+	await check('analytics summary', async () => {
+		const summary = await api('/api/v1/analytics/summary');
+		assert(typeof summary.total_messages === 'number', 'no analytics');
+	});
+	await check('read and write the OAuth admin config', async () => {
+		const before = await api('/api/v1/auths/admin/config/oauth');
+		assert('ENABLE_OAUTH' in before, 'no OAuth config');
+		assert(before.ENABLE_OAUTH_PERSISTENT_CONFIG === true, 'OAuth config is not editable');
+		await api('/api/v1/auths/admin/config/oauth', {
+			method: 'POST',
+			body: JSON.stringify({ OAUTH_PROVIDER_NAME: 'Smoke SSO' })
+		});
+		const after = await api('/api/v1/auths/admin/config/oauth');
+		assert(after.OAUTH_PROVIDER_NAME === 'Smoke SSO', 'OAuth config did not persist');
+		await api('/api/v1/auths/admin/config/oauth', {
+			method: 'POST',
+			body: JSON.stringify({ OAUTH_PROVIDER_NAME: before.OAUTH_PROVIDER_NAME || 'SSO' })
+		});
+	});
+
+	// Full sign-in round trip, only when a mock IdP is running:
+	//   node scripts/mock-oidc.mjs &   (see CLOUDFLARE.md)
+	const idp = process.env.SMOKE_OIDC_URL ?? 'http://127.0.0.1:9500';
+	const discovery = `${idp.replace(/\/+$/, '')}/.well-known/openid-configuration`;
+	const idpUp = await fetch(discovery)
+		.then((response) => response.ok)
+		.catch(() => false);
+
+	if (idpUp) {
+		const before = await api('/api/v1/auths/admin/config/oauth');
+		try {
+			await check('sign in through an OIDC provider end to end', async () => {
+				await api('/api/v1/auths/admin/config/oauth', {
+					method: 'POST',
+					body: JSON.stringify({
+						ENABLE_OAUTH: true,
+						OAUTH_PROVIDER_NAME: 'Smoke IdP',
+						OAUTH_CLIENT_ID: process.env.SMOKE_OIDC_CLIENT_ID ?? 'open-webui',
+						OAUTH_CLIENT_SECRET: process.env.SMOKE_OIDC_CLIENT_SECRET ?? 'open-webui-secret',
+						OPENID_PROVIDER_URL: discovery,
+						ENABLE_OAUTH_SIGNUP: true
+					})
+				});
+
+				const config = await api('/api/config');
+				assert(config.oauth?.providers?.oidc === 'Smoke IdP', 'the provider is not advertised');
+
+				// Follow login -> IdP -> callback by hand so the flow cookie and the
+				// `state` parameter are carried exactly as a browser would.
+				const login = await fetch(`${BASE}/oauth/oidc/login`, { redirect: 'manual' });
+				assert(login.status === 302, `login did not redirect (${login.status})`);
+				const flowCookie = (login.headers.get('set-cookie') ?? '').split(';')[0];
+				assert(flowCookie.startsWith('oauth_flow='), 'no flow cookie was set');
+
+				const authorize = await fetch(login.headers.get('location'), { redirect: 'manual' });
+				assert(authorize.status === 302, 'the IdP did not redirect back');
+
+				const callback = await fetch(authorize.headers.get('location'), {
+					redirect: 'manual',
+					headers: { Cookie: flowCookie }
+				});
+				assert(callback.status === 302, `the callback did not redirect (${callback.status})`);
+				const location = callback.headers.get('location') ?? '';
+				assert(!location.includes('error='), `sign-in failed: ${decodeURIComponent(location)}`);
+
+				const sessionCookie = (callback.headers.get('set-cookie') ?? '')
+					.split(/,\s*(?=[A-Za-z_]+=)/)
+					.find((entry) => entry.startsWith('token='));
+				assert(sessionCookie, 'no session cookie was issued');
+				const sessionToken = sessionCookie.split(';')[0].slice('token='.length);
+
+				const session = await fetch(`${BASE}/api/v1/auths/`, {
+					headers: { Authorization: `Bearer ${sessionToken}` }
+				}).then((response) => response.json());
+				assert(session.email, `the session token does not resolve: ${JSON.stringify(session)}`);
+			});
+
+			await check('reject an OAuth callback whose state does not match', async () => {
+				const login = await fetch(`${BASE}/oauth/oidc/login`, { redirect: 'manual' });
+				const flowCookie = (login.headers.get('set-cookie') ?? '').split(';')[0];
+				const authorize = await fetch(login.headers.get('location'), { redirect: 'manual' });
+				const tampered = (authorize.headers.get('location') ?? '').replace(
+					/state=[^&]*/,
+					'state=tampered'
+				);
+				const callback = await fetch(tampered, {
+					redirect: 'manual',
+					headers: { Cookie: flowCookie }
+				});
+				assert(
+					(callback.headers.get('location') ?? '').includes('error='),
+					'a mismatched state was accepted'
+				);
+			});
+		} finally {
+			const restore = {};
+			for (const [field, value] of Object.entries(before)) {
+				if (field !== 'OAUTH_PROVIDERS' && field !== 'ENABLE_OAUTH_PERSISTENT_CONFIG') {
+					restore[field] = value;
+				}
+			}
+			await api('/api/v1/auths/admin/config/oauth', {
+				method: 'POST',
+				body: JSON.stringify(restore)
+			});
+		}
+	} else {
+		console.log('  · OIDC sign-in skipped (no mock IdP on ' + idp + ')');
+	}
+}
+
+// --- Cleanup --------------------------------------------------------------
+console.log('\ncleanup');
+await check('delete the test chat, folder and file', async () => {
+	if (chatId) await api(`/api/v1/chats/${chatId}`, { method: 'DELETE' });
+	if (folderId) await api(`/api/v1/folders/${folderId}`, { method: 'DELETE' });
+	if (fileId) await api(`/api/v1/files/${fileId}`, { method: 'DELETE' });
+});
+
+console.log(`\n${passed} passed, ${failures.length} failed`);
+if (failures.length) {
+	for (const failure of failures) console.log(`  - ${failure}`);
+	process.exit(1);
+}
+
+/** Minimal Socket.IO client: enough to authenticate and collect chat events. */
+async function connectSocket(authToken) {
+	const url = `${BASE.replace(/^http/, 'ws')}/ws/socket.io/?EIO=4&transport=websocket`;
+	const ws = new WebSocket(url);
+	const listeners = new Map();
+	const channelListeners = new Map();
+	let sid = null;
+	let sources = 0;
+
+	await new Promise((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error('socket connect timed out')), 15000);
+		ws.addEventListener('error', () => reject(new Error('socket error')));
+		ws.addEventListener('message', (event) => {
+			const frame = String(event.data);
+			if (frame[0] === '0') {
+				ws.send('40' + JSON.stringify({ token: authToken }));
+				return;
+			}
+			if (frame[0] === '2') {
+				ws.send('3');
+				return;
+			}
+			if (frame.startsWith('40')) {
+				sid = JSON.parse(frame.slice(2)).sid;
+				ws.send('42' + JSON.stringify(['user-join', { auth: { token: authToken } }]));
+				clearTimeout(timer);
+				resolve();
+				return;
+			}
+			if (frame.startsWith('42')) {
+				const [name, payload] = JSON.parse(frame.slice(2));
+				if (name === 'events:channel') {
+					const channelHandler = channelListeners.get(payload.channel_id);
+					if (channelHandler) channelHandler(payload);
+					return;
+				}
+				if (name !== 'events') return;
+				if (payload.data?.type === 'source') sources += 1;
+				const handler = listeners.get(payload.message_id);
+				if (handler) handler(payload);
+			}
+		});
+	});
+
+	return {
+		get sid() {
+			return sid;
+		},
+		waitFor(messageId) {
+			return new Promise((resolve, reject) => {
+				let content = '';
+				const timer = setTimeout(() => reject(new Error('stream timed out')), 60000);
+				listeners.set(messageId, (payload) => {
+					const event = payload.data;
+					if (event?.type !== 'chat:completion') return;
+					const delta = event.data?.choices?.[0]?.delta?.content;
+					if (delta) content += delta;
+					if (event.data?.error) {
+						clearTimeout(timer);
+						reject(new Error(JSON.stringify(event.data.error).slice(0, 200)));
+					}
+					if (event.data?.done) {
+						clearTimeout(timer);
+						resolve(event.data.content ?? content);
+					}
+				});
+			});
+		},
+		sourcesSeen() {
+			return sources;
+		},
+		waitForChannel(channelId) {
+			return new Promise((resolve, reject) => {
+				const timer = setTimeout(() => reject(new Error('channel event timed out')), 15000);
+				channelListeners.set(channelId, (payload) => {
+					clearTimeout(timer);
+					resolve(payload);
+				});
+			});
+		},
+		close() {
+			try {
+				ws.close();
+			} catch {
+				// already closed
+			}
+		}
+	};
+}

@@ -311,3 +311,10 @@ cypress/videos
 cypress/screenshots
 .vscode/settings.json
 .cptr
+
+# Cloudflare Workers port
+workers/.wrangler
+workers/.dev.vars
+workers/.dev.vars.*
+!workers/.dev.vars.example
+workers/.svelte-kit
