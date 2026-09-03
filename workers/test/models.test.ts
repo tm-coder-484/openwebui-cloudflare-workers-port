@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_NVIDIA_MODELS, nvidiaConnection } from '../src/lib/models';
+import {
+	DEFAULT_NVIDIA_MODELS,
+	NVIDIA_PREFERRED_MODELS,
+	defaultNvidiaModel,
+	nvidiaConnection
+} from '../src/lib/models';
 import { buildUpstreamRequest } from '../src/lib/completions';
 import type { Env } from '../src/types';
 import type { ResolvedModel } from '../src/lib/models';
@@ -50,7 +55,82 @@ describe('NVIDIA NIM connection', () => {
 	});
 
 	it('ships a catalogue for endpoints that cannot be listed', () => {
-		expect(DEFAULT_NVIDIA_MODELS).toContain('meta/llama-3.3-70b-instruct');
+		expect(DEFAULT_NVIDIA_MODELS.length).toBeGreaterThan(3);
+		// Every entry must be a NIM `owner/model` id, or the picker shows a
+		// model the endpoint cannot route to.
+		for (const id of DEFAULT_NVIDIA_MODELS) expect(id).toMatch(/^[a-z0-9.-]+\/[a-z0-9._-]+$/);
+	});
+
+	it('offers the fallback catalogue before the long-lived ids', () => {
+		// The preference list is what picks the default, so the modern models
+		// have to come before the older ones kept for pinned deployments.
+		expect(NVIDIA_PREFERRED_MODELS.slice(0, DEFAULT_NVIDIA_MODELS.length)).toEqual(
+			DEFAULT_NVIDIA_MODELS
+		);
+		expect(NVIDIA_PREFERRED_MODELS).toContain('meta/llama-3.3-70b-instruct');
+		expect(NVIDIA_PREFERRED_MODELS.indexOf('meta/llama-3.3-70b-instruct')).toBeGreaterThan(
+			NVIDIA_PREFERRED_MODELS.indexOf('deepseek-ai/deepseek-v4-pro')
+		);
+	});
+});
+
+describe('defaultNvidiaModel', () => {
+	const kv = () => {
+		const store = new Map<string, string>();
+		return {
+			store,
+			get: async (key: string) => store.get(key) ?? null,
+			put: async (key: string, value: string) => void store.set(key, value)
+		};
+	};
+
+	const envServing = (ids: string[], cache = kv()) =>
+		({
+			NVIDIA_API_KEY: 'nvapi-test',
+			CACHE: cache,
+			DB: { prepare: () => ({ bind: () => ({ all: async () => ({ results: [] }) }) }) }
+		}) as any;
+
+	const stubFetch = (ids: string[]) => {
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify({ data: ids.map((id) => ({ id })) }), {
+				headers: { 'Content-Type': 'application/json' }
+			})) as any;
+	};
+
+	it('picks the highest-ranked model the endpoint actually serves', async () => {
+		stubFetch(['meta/llama-3.3-70b-instruct', 'moonshotai/kimi-k2.6']);
+		expect(await defaultNvidiaModel(envServing([]))).toBe('moonshotai/kimi-k2.6');
+	});
+
+	it('falls through a retired preferred id instead of naming it', async () => {
+		stubFetch(['meta/llama-3.3-70b-instruct']);
+		expect(await defaultNvidiaModel(envServing([]))).toBe('meta/llama-3.3-70b-instruct');
+	});
+
+	it('uses whatever is listed first when it recognises nothing', async () => {
+		stubFetch(['some-lab/brand-new-model', 'some-lab/other']);
+		expect(await defaultNvidiaModel(envServing([]))).toBe('some-lab/brand-new-model');
+	});
+
+	it('returns null when the endpoint lists nothing', async () => {
+		stubFetch([]);
+		expect(await defaultNvidiaModel(envServing([]))).toBeNull();
+	});
+
+	it('caches the answer so /api/config stays a cheap call', async () => {
+		const cache = kv();
+		stubFetch(['moonshotai/kimi-k2.6']);
+		await defaultNvidiaModel(envServing([], cache));
+		expect(cache.store.get('nvidia:default-model')).toBe('moonshotai/kimi-k2.6');
+
+		let called = false;
+		globalThis.fetch = (async () => {
+			called = true;
+			return new Response('{}', { headers: { 'Content-Type': 'application/json' } });
+		}) as any;
+		expect(await defaultNvidiaModel(envServing([], cache))).toBe('moonshotai/kimi-k2.6');
+		expect(called).toBe(false);
 	});
 });
 

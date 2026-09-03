@@ -53,15 +53,64 @@ export interface OpenAIConnection {
 
 /** Curated NIM catalogue used when the endpoint cannot be listed (self-hosted
  *  NIM containers serve a single model and some deployments block /models). */
+/**
+ * Shown only when an endpoint does not implement `/models` — the hosted NIM
+ * catalogue does, so this is the self-hosted-microservice fallback. Ordered
+ * strongest-first because the first entry becomes the picker's default.
+ */
 export const DEFAULT_NVIDIA_MODELS = [
-	'meta/llama-3.3-70b-instruct',
-	'meta/llama-3.1-405b-instruct',
-	'meta/llama-3.1-8b-instruct',
-	'nvidia/llama-3.1-nemotron-70b-instruct',
-	'mistralai/mixtral-8x22b-instruct-v0.1',
-	'deepseek-ai/deepseek-r1',
-	'qwen/qwen2.5-coder-32b-instruct'
+	'deepseek-ai/deepseek-v4-pro',
+	'moonshotai/kimi-k2.6',
+	'z-ai/glm5',
+	'qwen/qwen3-235b-a22b',
+	'deepseek-ai/deepseek-v3.2',
+	'openai/gpt-oss-120b',
+	'nvidia/llama-3.3-nemotron-super-49b-v1.5',
+	'meta/llama-4-maverick-17b-128e-instruct',
+	'qwen/qwen3-coder-480b-a35b-instruct',
+	'mistralai/mistral-large-3-675b-instruct-2512'
 ];
+
+/**
+ * Preference order for the model new chats open with.
+ *
+ * The catalogue turns over quickly, so nothing here is pinned: the default is
+ * whichever of these the deployment's endpoint actually serves, and if it
+ * serves none of them, whatever it lists first. A retired id costs nothing but
+ * a step down the list.
+ */
+export const NVIDIA_PREFERRED_MODELS = [
+	...DEFAULT_NVIDIA_MODELS,
+	// Long-lived ids, kept last so an older or pinned NIM still resolves.
+	'meta/llama-3.1-405b-instruct',
+	'meta/llama-3.3-70b-instruct'
+];
+
+const DEFAULT_MODEL_CACHE_KEY = 'nvidia:default-model';
+const DEFAULT_MODEL_TTL = 3600;
+
+/**
+ * The model to open new chats with, resolved against the live catalogue and
+ * cached in KV so `/api/config` stays a cheap call.
+ */
+export async function defaultNvidiaModel(env: Env): Promise<string | null> {
+	const cached = await env.CACHE?.get(DEFAULT_MODEL_CACHE_KEY).catch(() => null);
+	if (cached) return cached;
+
+	const connection = await nvidiaConnection(env);
+	if (!connection) return null;
+
+	const available = await fetchOpenAIModels(connection);
+	const ids = new Set(available.map((model) => model.id));
+	const chosen = NVIDIA_PREFERRED_MODELS.find((id) => ids.has(id)) ?? available[0]?.id ?? null;
+
+	if (chosen) {
+		await env.CACHE?.put(DEFAULT_MODEL_CACHE_KEY, chosen, {
+			expirationTtl: DEFAULT_MODEL_TTL
+		}).catch(() => {});
+	}
+	return chosen;
+}
 
 /**
  * The NVIDIA NIM connection.

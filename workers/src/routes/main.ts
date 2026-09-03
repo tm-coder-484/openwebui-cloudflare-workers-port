@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { adminUser, verifiedUser } from '../lib/auth';
 import { getConfigMany, getUserPermissions } from '../lib/config';
+import { defaultNvidiaModel } from '../lib/models';
 import { oauthProviders, oauthSettings, providerButtons } from '../lib/oauth';
 import { hasUsers } from '../lib/users';
 import { WEBUI_VERSION } from '../lib/version';
@@ -94,10 +95,13 @@ app.get('/api/config', async (c) => {
 
 	// With no explicit default, point new chats at the primary provider's model
 	// so a fresh deployment with just an NVIDIA_API_KEY works out of the box.
+	// An admin-set `nvidia.default_model` wins; otherwise the choice is made
+	// against the live catalogue (KV-cached) so it cannot name a retired model.
+	const nvidiaAvailable = config['nvidia.enable'] !== false && Boolean(config['nvidia.api_key']);
 	const defaultModels =
 		config['ui.default_models'] ||
-		(config['nvidia.enable'] !== false && config['nvidia.api_key']
-			? (config['nvidia.default_model'] as string)
+		(nvidiaAvailable
+			? (config['nvidia.default_model'] as string) || (await defaultNvidiaModel(c.env))
 			: null);
 
 	const onboarding = user ? false : !(await hasUsers(c.env));

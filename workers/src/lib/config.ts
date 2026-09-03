@@ -209,7 +209,8 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'nvidia.api_base_url': 'https://integrate.api.nvidia.com/v1',
 	'nvidia.api_key': '',
 	'nvidia.model_ids': [],
-	'nvidia.default_model': 'meta/llama-3.3-70b-instruct',
+	// Unset by default: resolved from the live catalogue (see defaultNvidiaModel).
+	'nvidia.default_model': '',
 
 	'openai.enable': true,
 	'openai.api_base_urls': [],

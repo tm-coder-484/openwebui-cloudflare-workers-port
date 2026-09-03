@@ -49,19 +49,99 @@ its own provider so it stays the primary option:
   is enough; the model list comes from `https://integrate.api.nvidia.com/v1/models`.
 - **Self-hosted NIM microservice** — point `NVIDIA_API_BASE_URL` at your own
   host (`https://nim.internal.example/v1`). No key is required there.
-- NIM models are listed **first** in the picker and tagged `NVIDIA NIM`, and new
-  chats default to `nvidia.default_model` (`meta/llama-3.3-70b-instruct`) when
-  no other default is set.
+- NIM models are listed **first** in the picker and tagged `NVIDIA NIM`.
+- New chats open with the strongest model your endpoint actually serves. The
+  catalogue turns over quickly, so nothing is pinned: the Worker walks an
+  ordered preference list (DeepSeek V4 Pro, Kimi K2.6, GLM-5, Qwen3 235B,
+  DeepSeek V3.2, gpt-oss-120b, Nemotron Super 49B, Llama 4 Maverick…) and takes
+  the first id the endpoint returns, falling back to whatever it lists first.
+  A retired id costs a step down the list, not a broken first message. The
+  answer is cached in KV for an hour, so `/api/config` stays a cheap call. Set
+  `nvidia.default_model` to override the choice entirely.
 - If the endpoint cannot be listed — some self-hosted deployments do not expose
-  `/models` — a built-in catalogue (Llama 3.3 70B, Llama 3.1 405B/8B, Nemotron
-  70B, Mixtral 8x22B, DeepSeek-R1, Qwen2.5-Coder) is offered instead. Pin an
+  `/models` — the same catalogue is offered as a static list instead. Pin an
   exact list with `NVIDIA_MODELS=meta/llama-3.1-8b-instruct,...`.
 - Everything is editable at runtime through `/api/v1/configs/connections`
   (`ENABLE_NVIDIA_API`, `NVIDIA_API_BASE_URL`, `NVIDIA_API_KEY`,
   `NVIDIA_MODEL_IDS`), so a deployed instance can be re-pointed without a
   redeploy.
 
-## Deploy to your Cloudflare account
+## Deploy from the Cloudflare dashboard (no terminal)
+
+The Worker builds and deploys straight from a GitHub repository, so a
+deployment needs nothing installed locally.
+
+**1. Get the code onto your own GitHub account.** Fork this repository, or push
+a clone to a new repo of your own. Cloudflare needs read access to it.
+
+**2. Connect it to Cloudflare.** In the dashboard, go to **Workers & Pages** →
+**Create** → the **Import a repository** option, authorise GitHub, and pick the
+repo. (Cloudflare renames these screens from time to time; you are looking for
+the flow that builds a Worker from Git, not the "upload assets" one.)
+
+**3. Set the build settings.** Cloudflare will guess; replace its guesses with:
+
+| Setting        | Value                                                        |
+| -------------- | ------------------------------------------------------------ |
+| Build command  | `npm ci && npm run build:workers && npm --prefix workers ci` |
+| Deploy command | `npx wrangler deploy --config workers/wrangler.toml`         |
+| Root directory | leave as the repository root                                 |
+
+The build command builds the SvelteKit frontend into `./build` (which
+`wrangler.toml` serves as static assets) and then installs the Worker's own
+dependencies. Both commands run from the repository root, which is why the
+deploy command needs `--config` — the Worker's config lives in `workers/`, and
+paths inside it resolve relative to itself. Leave the root directory alone:
+`build:workers` is a root-level script and needs the root `package.json`.
+
+The Node version is pinned by the `.nvmrc` in the repository root. This matters:
+the root `.npmrc` sets `engine-strict=true` and `package.json` caps `engines` at
+Node 22, so `npm ci` fails outright on a newer build image. If your build errors
+with an `EBADENGINE`/unsupported-engine message, set a `NODE_VERSION` build
+variable to `22`.
+
+**4. Deploy.** The first build takes a few minutes — most of it is the frontend.
+
+D1, KV and R2 are **created for you**: the bindings in `workers/wrangler.toml`
+deliberately carry no resource ids, and Wrangler provisions any missing KV
+namespace, R2 bucket or D1 database on deploy, naming them after the Worker.
+There is nothing to copy and paste. ([Cloudflare changelog](https://developers.cloudflare.com/changelog/post/2025-10-24-automatic-resource-provisioning/))
+
+**5. Apply the database migrations.** This is the one step the deploy does not
+do for you, because a schema change is not something to run implicitly. In the
+dashboard open **Storage & Databases** → **D1**, pick the new database, and use
+its **Console** to run the contents of each file in `workers/migrations/` in
+filename order (`0001_init.sql` first). Alternatively, add them to the deploy
+command once and remove it afterwards:
+
+```
+npx wrangler d1 migrations apply open-webui --remote --config workers/wrangler.toml &&
+  npx wrangler deploy --config workers/wrangler.toml
+```
+
+Until this is done every request returns a 503 that says the database is not
+initialised, so it is obvious if you skip it.
+
+**6. Set the secrets.** Under the Worker's **Settings** → **Variables and
+Secrets**, add:
+
+| Name               | Value                                                          |
+| ------------------ | -------------------------------------------------------------- |
+| `WEBUI_SECRET_KEY` | any long random string — it signs session tokens               |
+| `NVIDIA_API_KEY`   | your NIM key from [build.nvidia.com](https://build.nvidia.com) |
+
+Mark both as **Secret** rather than plaintext. Also edit the `WEBUI_URL`
+variable to your real URL (`https://open-webui.<subdomain>.workers.dev`, or your
+custom domain) so OAuth redirects and share links point at the right host.
+
+**7. Open it and create your account.** The **first** account to sign up becomes
+the administrator, so do this before sharing the URL with anyone.
+
+Redeploys are automatic on every push to the connected branch.
+
+---
+
+## Deploy from a terminal
 
 ```bash
 npx wrangler login
@@ -92,6 +172,9 @@ npm --prefix workers run deploy
 # Primary model provider (skip if you configure one in the UI instead):
 (cd workers && npx wrangler secret put NVIDIA_API_KEY)
 ```
+
+Both paths are optional — you can also let Wrangler provision the resources, as
+the dashboard flow does, and just run `npm --prefix workers run deploy`.
 
 ---
 
