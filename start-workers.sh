@@ -52,7 +52,9 @@ if [ ! -f workers/.dev.vars ]; then
 	cat > workers/.dev.vars <<VARS
 # Local development secrets. Never commit this file.
 WEBUI_SECRET_KEY=$SECRET
-# Point the app at any OpenAI-compatible API:
+# Primary provider — NVIDIA NIM (get a key at https://build.nvidia.com):
+# NVIDIA_API_KEY=nvapi-...
+# Or any other OpenAI-compatible API:
 # OPENAI_API_BASE_URL=https://api.openai.com/v1
 # OPENAI_API_KEY=sk-...
 VARS

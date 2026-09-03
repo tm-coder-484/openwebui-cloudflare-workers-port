@@ -9,6 +9,10 @@ import { bad } from '../lib/util';
 const app = new Hono<AppContext>({ strict: false });
 
 const CONNECTIONS_KEYS: Record<string, string> = {
+	ENABLE_NVIDIA_API: 'nvidia.enable',
+	NVIDIA_API_BASE_URL: 'nvidia.api_base_url',
+	NVIDIA_API_KEY: 'nvidia.api_key',
+	NVIDIA_MODEL_IDS: 'nvidia.model_ids',
 	ENABLE_DIRECT_CONNECTIONS: 'direct.enable',
 	ENABLE_BASE_MODELS_CACHE: 'models.base_models_cache',
 	ENABLE_OPENAI_API: 'openai.enable',

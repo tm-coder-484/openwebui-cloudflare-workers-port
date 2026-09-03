@@ -24,20 +24,42 @@ git clone <this repo> && cd openwebui-cloudflare-workers-port
 Then open <http://localhost:8787>. **The first account you create becomes the
 administrator.**
 
-Want to talk to a real model instead? Drop `--mock` and put your key in
-`workers/.dev.vars`:
+Want to talk to a real model instead? Drop `--mock` and put an **NVIDIA NIM**
+key in `workers/.dev.vars` — NIM is the primary provider, so a key is all the
+configuration it needs:
 
 ```bash
 cp workers/.dev.vars.example workers/.dev.vars
-# edit: OPENAI_API_BASE_URL=https://api.openai.com/v1
-#       OPENAI_API_KEY=sk-...
+# edit: NVIDIA_API_KEY=nvapi-...        (get one at https://build.nvidia.com)
 ./start-workers.sh
 ```
 
-Any OpenAI-compatible endpoint works — OpenAI, OpenRouter, Groq, Together,
-vLLM, LM Studio, llama.cpp, or Ollama's `/v1` shim. In local development the
-Worker can reach `http://localhost:...`; a deployed Worker cannot (see
-[Networking](#networking)).
+Any OpenAI-compatible endpoint works alongside it — OpenAI, OpenRouter, Groq,
+Together, vLLM, LM Studio, llama.cpp, or Ollama's `/v1` shim — configured under
+Admin Settings → Connections or with `OPENAI_API_BASE_URL` / `OPENAI_API_KEY`.
+In local development the Worker can reach `http://localhost:...`; a deployed
+Worker cannot (see [Networking](#networking)).
+
+## Models: NVIDIA NIM first
+
+NIM speaks the OpenAI API, so it needs no special client — but it is wired in as
+its own provider so it stays the primary option:
+
+- **Hosted catalogue** — `NVIDIA_API_KEY` (from [build.nvidia.com](https://build.nvidia.com))
+  is enough; the model list comes from `https://integrate.api.nvidia.com/v1/models`.
+- **Self-hosted NIM microservice** — point `NVIDIA_API_BASE_URL` at your own
+  host (`https://nim.internal.example/v1`). No key is required there.
+- NIM models are listed **first** in the picker and tagged `NVIDIA NIM`, and new
+  chats default to `nvidia.default_model` (`meta/llama-3.3-70b-instruct`) when
+  no other default is set.
+- If the endpoint cannot be listed — some self-hosted deployments do not expose
+  `/models` — a built-in catalogue (Llama 3.3 70B, Llama 3.1 405B/8B, Nemotron
+  70B, Mixtral 8x22B, DeepSeek-R1, Qwen2.5-Coder) is offered instead. Pin an
+  exact list with `NVIDIA_MODELS=meta/llama-3.1-8b-instruct,...`.
+- Everything is editable at runtime through `/api/v1/configs/connections`
+  (`ENABLE_NVIDIA_API`, `NVIDIA_API_BASE_URL`, `NVIDIA_API_KEY`,
+  `NVIDIA_MODEL_IDS`), so a deployed instance can be re-pointed without a
+  redeploy.
 
 ## Deploy to your Cloudflare account
 
@@ -66,6 +88,9 @@ npm --prefix workers run db:remote
 
 npm run build:workers                          # SvelteKit -> ./build
 npm --prefix workers run deploy
+
+# Primary model provider (skip if you configure one in the UI instead):
+(cd workers && npx wrangler secret put NVIDIA_API_KEY)
 ```
 
 ---
@@ -175,7 +200,8 @@ extra services.
 - Email/password auth, API keys, JWT sessions, pending-user approval flow
 - Users, groups, and the full permission matrix
 - Chats: create, edit, delete, folders, tags, pin, archive, share, clone, fork
-- Streaming completions from any OpenAI-compatible provider and Workers AI
+- Streaming completions from NVIDIA NIM (primary), any OpenAI-compatible
+  provider, and Workers AI
 - Multi-model (side-by-side) responses
 - Automatic title, tag and follow-up generation
 - Workspace: models (presets and overrides), prompts, knowledge, skills

@@ -52,6 +52,7 @@ if not exist workers\.dev.vars (
 	for /f %%i in ('node -e "console.log(require(''crypto'').randomBytes(32).toString(''hex''))"') do set SECRET=%%i
 	> workers\.dev.vars echo # Local development secrets. Never commit this file.
 	>> workers\.dev.vars echo WEBUI_SECRET_KEY=!SECRET!
+	>> workers\.dev.vars echo # NVIDIA_API_KEY=nvapi-...
 	>> workers\.dev.vars echo # OPENAI_API_BASE_URL=https://api.openai.com/v1
 	>> workers\.dev.vars echo # OPENAI_API_KEY=sk-...
 )

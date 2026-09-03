@@ -26,6 +26,10 @@ export interface Env {
 	DEFAULT_MODELS?: string;
 	ENABLE_WORKERS_AI?: string;
 	WORKERS_AI_MODELS?: string;
+	NVIDIA_API_KEY?: string;
+	NVIDIA_API_BASE_URL?: string;
+	NVIDIA_MODELS?: string;
+	ENABLE_NVIDIA_API?: string;
 	OPENAI_API_KEY?: string;
 	OPENAI_API_KEYS?: string;
 	OPENAI_API_BASE_URL?: string;

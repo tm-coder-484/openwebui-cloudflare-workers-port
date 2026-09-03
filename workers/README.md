@@ -24,19 +24,19 @@ assets path relative to `wrangler.toml`). From the repository root,
 
 ## Source map
 
-| Path                     | What lives there                                                          |
-| ------------------------ | ------------------------------------------------------------------------- |
-| `src/index.ts`           | Router. Mounts one module per upstream FastAPI router.                    |
-| `src/types.ts`           | `Env` bindings and the session user type.                                 |
-| `src/lib/auth.ts`        | Bearer/API-key/cookie authentication middleware.                          |
-| `src/lib/crypto.ts`      | PBKDF2 password hashing and HS256 JWTs via WebCrypto.                     |
-| `src/lib/config.ts`      | The persisted config table, defaults, and env seeding.                    |
-| `src/lib/models.ts`      | Model registry: providers + workspace presets.                            |
-| `src/lib/completions.ts` | The chat pipeline: history, upstream call, SSE parsing, background tasks. |
-| `src/lib/retrieval.ts`   | Chunking, keyword ranking, optional Vectorize search.                     |
-| `src/socket/hub.ts`      | `SocketHub` Durable Object: rooms, presence, streaming.                   |
-| `src/socket/protocol.ts` | Engine.IO v4 / Socket.IO v5 codec.                                        |
-| `src/routes/*.ts`        | One module per `backend/open_webui/routers/*.py`.                         |
+| Path                     | What lives there                                                                          |
+| ------------------------ | ----------------------------------------------------------------------------------------- |
+| `src/index.ts`           | Router. Mounts one module per upstream FastAPI router.                                    |
+| `src/types.ts`           | `Env` bindings and the session user type.                                                 |
+| `src/lib/auth.ts`        | Bearer/API-key/cookie authentication middleware.                                          |
+| `src/lib/crypto.ts`      | PBKDF2 password hashing and HS256 JWTs via WebCrypto.                                     |
+| `src/lib/config.ts`      | The persisted config table, defaults, and env seeding.                                    |
+| `src/lib/models.ts`      | Model registry: NVIDIA NIM (primary), OpenAI-compatible connections, Workers AI, presets. |
+| `src/lib/completions.ts` | The chat pipeline: history, upstream call, SSE parsing, background tasks.                 |
+| `src/lib/retrieval.ts`   | Chunking, keyword ranking, optional Vectorize search.                                     |
+| `src/socket/hub.ts`      | `SocketHub` Durable Object: rooms, presence, streaming.                                   |
+| `src/socket/protocol.ts` | Engine.IO v4 / Socket.IO v5 codec.                                                        |
+| `src/routes/*.ts`        | One module per `backend/open_webui/routers/*.py`.                                         |
 
 ## Conventions
 

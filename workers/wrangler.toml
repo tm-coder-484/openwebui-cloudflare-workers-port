@@ -68,7 +68,15 @@ ENABLE_SIGNUP = "true"
 ENABLE_LOGIN_FORM = "true"
 DEFAULT_USER_ROLE = "pending"
 ENABLE_WORKERS_AI = "true"
+
+# NVIDIA NIM is the primary model provider. The hosted catalogue lives at
+# build.nvidia.com; point this at your own host to use a self-hosted NIM
+# microservice instead (both speak the OpenAI API).
+ENABLE_NVIDIA_API = "true"
+NVIDIA_API_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
 # Set with `wrangler secret put`:
 #   WEBUI_SECRET_KEY   - JWT signing key (REQUIRED in production)
+#   NVIDIA_API_KEY     - NVIDIA NIM key from build.nvidia.com (starts with nvapi-)
 #   OPENAI_API_KEY     - comma separated keys, matched positionally with OPENAI_API_BASE_URLS
 #   OPENAI_API_BASE_URL

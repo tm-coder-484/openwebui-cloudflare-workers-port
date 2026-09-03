@@ -5,7 +5,12 @@
 #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 WEBUI_SECRET_KEY=change-me
 
-# Any OpenAI-compatible endpoint. Comma-separate to configure several.
+# Primary provider: NVIDIA NIM. Get a key at https://build.nvidia.com
+# NVIDIA_API_KEY=nvapi-...
+# Self-hosted NIM microservice instead of the hosted catalogue:
+# NVIDIA_API_BASE_URL=https://nim.internal.example/v1
+
+# Any other OpenAI-compatible endpoint. Comma-separate to configure several.
 # OPENAI_API_BASE_URL=https://api.openai.com/v1
 # OPENAI_API_KEY=sk-...
 

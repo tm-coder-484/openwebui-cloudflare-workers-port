@@ -62,6 +62,17 @@ if ! wrangler secret list 2>/dev/null | grep -q WEBUI_SECRET_KEY; then
 	node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))' | wrangler secret put WEBUI_SECRET_KEY
 fi
 
+if ! wrangler secret list 2>/dev/null | grep -q NVIDIA_API_KEY; then
+	step "NVIDIA NIM API key (primary model provider)"
+	echo "   Get one at https://build.nvidia.com — press Enter to skip and configure"
+	echo "   a provider later under Admin Settings -> Connections."
+	printf '   NVIDIA_API_KEY: '
+	read -r NVIDIA_KEY || NVIDIA_KEY=""
+	if [ -n "$NVIDIA_KEY" ]; then
+		printf '%s' "$NVIDIA_KEY" | wrangler secret put NVIDIA_API_KEY
+	fi
+fi
+
 step "Deploying"
 cd workers
 npx wrangler deploy

@@ -87,8 +87,19 @@ app.get('/api/config', async (c) => {
 		'file.image_compression_height',
 		'ui.pending_user_overlay_title',
 		'ui.pending_user_overlay_content',
-		'ui.watermark'
+		'ui.watermark',
+		'nvidia.enable',
+		'nvidia.api_key',
+		'nvidia.default_model'
 	]);
+
+	// With no explicit default, point new chats at the primary provider's model
+	// so a fresh deployment with just an NVIDIA_API_KEY works out of the box.
+	const defaultModels =
+		config['ui.default_models'] ||
+		(config['nvidia.enable'] !== false && config['nvidia.api_key']
+			? (config['nvidia.default_model'] as string)
+			: null);
 
 	const onboarding = user ? false : !(await hasUsers(c.env));
 
@@ -154,7 +165,7 @@ app.get('/api/config', async (c) => {
 
 	if (user && (user.role === 'admin' || user.role === 'user')) {
 		Object.assign(base, {
-			default_models: config['ui.default_models'],
+			default_models: defaultModels,
 			default_pinned_models: config['ui.default_pinned_models'],
 			default_prompt_suggestions: config['ui.prompt_suggestions'],
 			code: {

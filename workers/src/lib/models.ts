@@ -47,6 +47,50 @@ export interface OpenAIConnection {
 	key: string;
 	idx: number;
 	config: Record<string, any>;
+	/** Marks the NVIDIA NIM connection so its models can be labelled and ranked. */
+	provider?: 'nvidia' | 'openai';
+}
+
+/** Curated NIM catalogue used when the endpoint cannot be listed (self-hosted
+ *  NIM containers serve a single model and some deployments block /models). */
+export const DEFAULT_NVIDIA_MODELS = [
+	'meta/llama-3.3-70b-instruct',
+	'meta/llama-3.1-405b-instruct',
+	'meta/llama-3.1-8b-instruct',
+	'nvidia/llama-3.1-nemotron-70b-instruct',
+	'mistralai/mixtral-8x22b-instruct-v0.1',
+	'deepseek-ai/deepseek-r1',
+	'qwen/qwen2.5-coder-32b-instruct'
+];
+
+/**
+ * The NVIDIA NIM connection.
+ *
+ * NIM speaks the OpenAI API, so it reuses the same request path; it is resolved
+ * separately (and first) so its models stay the primary option in the picker.
+ */
+export async function nvidiaConnection(env: Env): Promise<OpenAIConnection | null> {
+	const config = await getConfigMany(env, [
+		'nvidia.enable',
+		'nvidia.api_base_url',
+		'nvidia.api_key',
+		'nvidia.model_ids'
+	]);
+	if (config['nvidia.enable'] === false) return null;
+
+	const url = String(config['nvidia.api_base_url'] ?? '').replace(/\/+$/, '');
+	const key = String(config['nvidia.api_key'] ?? '');
+	if (!url) return null;
+	// The hosted catalogue needs a key; a self-hosted NIM container may not.
+	if (!key && url.includes('api.nvidia.com')) return null;
+
+	return {
+		url,
+		key,
+		idx: -1,
+		provider: 'nvidia',
+		config: { model_ids: (config['nvidia.model_ids'] as string[]) ?? [] }
+	};
 }
 
 export async function openaiConnections(env: Env): Promise<OpenAIConnection[]> {
@@ -65,12 +109,17 @@ export async function openaiConnections(env: Env): Promise<OpenAIConnection[]> {
 			url: url.replace(/\/+$/, ''),
 			key: keys[idx] ?? '',
 			idx,
+			provider: 'openai' as const,
 			config: configs[String(idx)] ?? configs[url] ?? {}
 		}))
 		.filter((connection) => connection.url && connection.config?.enable !== false);
 }
 
 async function fetchOpenAIModels(connection: OpenAIConnection): Promise<ModelEntry[]> {
+	const isNvidia = connection.provider === 'nvidia';
+	const ownedBy = isNvidia ? 'nvidia' : 'openai';
+	const tags = isNvidia ? [{ name: 'NVIDIA NIM' }] : [];
+
 	// An explicit model_ids list skips the network round-trip entirely.
 	const manualIds: string[] = connection.config?.model_ids ?? [];
 	if (manualIds.length) {
@@ -79,12 +128,12 @@ async function fetchOpenAIModels(connection: OpenAIConnection): Promise<ModelEnt
 			name: id,
 			object: 'model' as const,
 			created: now(),
-			owned_by: 'openai',
+			owned_by: ownedBy,
 			openai: { id },
 			urlIdx: connection.idx,
 			connection_type: connection.config?.connection_type ?? 'external',
 			actions: [],
-			tags: []
+			tags
 		}));
 	}
 
@@ -98,7 +147,7 @@ async function fetchOpenAIModels(connection: OpenAIConnection): Promise<ModelEnt
 		});
 		if (!response.ok) {
 			console.warn(`[open-webui] ${connection.url}/models responded ${response.status}`);
-			return [];
+			return isNvidia ? nvidiaFallbackModels(connection) : [];
 		}
 		const payload = (await response.json()) as { data?: any[] } | any[];
 		const list = Array.isArray(payload) ? payload : (payload?.data ?? []);
@@ -110,17 +159,32 @@ async function fetchOpenAIModels(connection: OpenAIConnection): Promise<ModelEnt
 				name: model.name ?? model.id,
 				object: 'model' as const,
 				created: model.created ?? now(),
-				owned_by: 'openai',
+				owned_by: ownedBy,
 				openai: model,
 				urlIdx: connection.idx,
 				connection_type: connection.config?.connection_type ?? 'external',
 				actions: [],
-				tags: []
+				tags
 			}));
 	} catch (error) {
 		console.warn(`[open-webui] failed to list models from ${connection.url}:`, error);
-		return [];
+		return isNvidia ? nvidiaFallbackModels(connection) : [];
 	}
+}
+
+function nvidiaFallbackModels(connection: OpenAIConnection): ModelEntry[] {
+	return DEFAULT_NVIDIA_MODELS.map((id) => ({
+		id,
+		name: id,
+		object: 'model' as const,
+		created: 0,
+		owned_by: 'nvidia',
+		openai: { id },
+		urlIdx: connection.idx,
+		connection_type: 'external',
+		actions: [],
+		tags: [{ name: 'NVIDIA NIM' }]
+	}));
 }
 
 function workersAIModels(env: Env, configured: string[]): ModelEntry[] {
@@ -183,10 +247,16 @@ export async function getModelRow(env: Env, id: string): Promise<ModelRow | null
 /** Base models only — no workspace overlay. Used by the admin models page. */
 export async function getBaseModels(env: Env): Promise<ModelEntry[]> {
 	const config = await getConfigMany(env, ['workers_ai.enable', 'workers_ai.models']);
+	const nvidia = await nvidiaConnection(env);
 	const connections = await openaiConnections(env);
-	const fetched = await Promise.all(connections.map(fetchOpenAIModels));
 
-	const models: ModelEntry[] = fetched.flat();
+	// NVIDIA NIM is listed first so it is the default option in the picker.
+	const [nvidiaModels, ...fetched] = await Promise.all([
+		nvidia ? fetchOpenAIModels(nvidia) : Promise.resolve([]),
+		...connections.map(fetchOpenAIModels)
+	]);
+
+	const models: ModelEntry[] = [...nvidiaModels, ...fetched.flat()];
 	if (config['workers_ai.enable'] !== false) {
 		models.push(...workersAIModels(env, (config['workers_ai.models'] as string[]) ?? []));
 	}
@@ -297,9 +367,15 @@ export async function resolveModel(env: Env, modelId: string): Promise<ResolvedM
 		return { id: modelId, upstreamId, entry: target, params, systemPrompt, workersAI: true };
 	}
 
+	// owned_by identifies the provider; NIM models resolve to the NIM connection.
+	const nvidia = await nvidiaConnection(env);
 	const connections = await openaiConnections(env);
 	const connection =
-		connections.find((item) => item.idx === target.urlIdx) ?? connections[0] ?? undefined;
+		(target.owned_by === 'nvidia' ? nvidia : null) ??
+		connections.find((item) => item.idx === target.urlIdx) ??
+		connections[0] ??
+		nvidia ??
+		undefined;
 	return {
 		id: modelId,
 		upstreamId,

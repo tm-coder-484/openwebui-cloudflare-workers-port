@@ -202,6 +202,15 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'task.model': null,
 	'task.model_external': null,
 
+	// NVIDIA NIM is the primary model provider: an OpenAI-compatible API that
+	// serves the hosted catalogue on build.nvidia.com and self-hosted NIM
+	// microservices alike, so one API key is enough to get running.
+	'nvidia.enable': true,
+	'nvidia.api_base_url': 'https://integrate.api.nvidia.com/v1',
+	'nvidia.api_key': '',
+	'nvidia.model_ids': [],
+	'nvidia.default_model': 'meta/llama-3.3-70b-instruct',
+
 	'openai.enable': true,
 	'openai.api_base_urls': [],
 	'openai.api_keys': [],
@@ -238,6 +247,11 @@ function envDefaults(env: Env): Record<string, unknown> {
 	if (env.JWT_EXPIRES_IN) seeded['auth.jwt_expiry'] = env.JWT_EXPIRES_IN;
 	if (env.RAG_EMBEDDING_MODEL) seeded['rag.embedding_model'] = env.RAG_EMBEDDING_MODEL;
 	if (env.TASK_MODEL) seeded['task.model'] = env.TASK_MODEL;
+
+	if (env.ENABLE_NVIDIA_API !== undefined) seeded['nvidia.enable'] = toBool(env.ENABLE_NVIDIA_API);
+	if (env.NVIDIA_API_KEY) seeded['nvidia.api_key'] = env.NVIDIA_API_KEY;
+	if (env.NVIDIA_API_BASE_URL) seeded['nvidia.api_base_url'] = env.NVIDIA_API_BASE_URL;
+	if (env.NVIDIA_MODELS) seeded['nvidia.model_ids'] = csv(env.NVIDIA_MODELS);
 
 	const urls = csv(env.OPENAI_API_BASE_URLS ?? env.OPENAI_API_BASE_URL ?? '');
 	const keys = csv(env.OPENAI_API_KEYS ?? env.OPENAI_API_KEY ?? '');
