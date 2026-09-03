@@ -136,7 +136,7 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'folders.enable': true,
 	'folders.max_file_count': null,
 	'channels.enable': true,
-	'calendar.enable': false,
+	'calendar.enable': true,
 	'automations.enable': true,
 	'notes.enable': true,
 	'memories.enable': true,

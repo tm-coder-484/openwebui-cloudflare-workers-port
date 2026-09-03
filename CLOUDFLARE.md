@@ -210,6 +210,14 @@ To fire the trigger by hand while developing:
 curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=*+*+*+*+*"
 ```
 
+### Calendar
+
+Calendars, events and RSVPs are stored in D1; recurring events are expanded on
+read with the same RRULE engine the automations use, so a month view costs one
+query plus in-memory expansion. Alongside the user's own calendars, a read-only
+**Scheduled Tasks** calendar shows each automation's upcoming occurrences and
+its past runs, linking back to the chats they produced.
+
 ### Web search
 
 Enable it under **Admin Settings → Web Search**, or with the config API. Five
@@ -243,6 +251,8 @@ citations.
 - Files in R2 with text extraction, chunking and retrieval
 - Notes (with realtime collaboration relay) and Channels (realtime messaging)
 - Automations: scheduled prompts driven by a Cron Trigger, with run history
+- Calendar: calendars, recurring events, attendees and RSVPs, plus a read-only
+  "Scheduled Tasks" calendar showing automation runs
 - Memories, feedback/evaluations, admin usage analytics
 - Web search in chat (DuckDuckGo, SearXNG, Tavily, Serper, Brave) with page
   retrieval, status updates and citations
