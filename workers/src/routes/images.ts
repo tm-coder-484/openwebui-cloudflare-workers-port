@@ -17,15 +17,30 @@ const IMAGE_KEYS: Record<string, string> = {
 	IMAGE_STEPS: 'image_generation.steps'
 };
 
-app.get('/config', async (c) => {
+// The frontend calls both /config and /image/config depending on the screen.
+app.get('/image/config', async (c) => imageConfig(c));
+app.post('/image/config/update', async (c) => updateImageConfig(c));
+app.post('/config/url/verify', async (c) => {
+	adminUser(c);
+	const body = (await c.req.json()) as { url?: string };
+	if (!body.url) throw bad('A URL is required');
+	const response = await fetch(body.url, { signal: AbortSignal.timeout(10_000) }).catch(() => null);
+	if (!response?.ok) throw bad('Could not reach the image server.');
+	return c.json({ status: true });
+});
+
+app.get('/config', async (c) => imageConfig(c));
+app.post('/config/update', async (c) => updateImageConfig(c));
+
+async function imageConfig(c: any) {
 	adminUser(c);
 	const config = await getConfigMany(c.env, Object.values(IMAGE_KEYS));
 	const out: Record<string, unknown> = {};
 	for (const [field, key] of Object.entries(IMAGE_KEYS)) out[field] = config[key] ?? null;
 	return c.json(out);
-});
+}
 
-app.post('/config/update', async (c) => {
+async function updateImageConfig(c: any) {
 	adminUser(c);
 	const body = (await c.req.json()) as Record<string, unknown>;
 	const updates: Record<string, unknown> = {};
@@ -33,7 +48,7 @@ app.post('/config/update', async (c) => {
 		if (field in body) updates[key] = body[field];
 	await setConfigMany(c.env, updates);
 	return c.json(body);
-});
+}
 
 app.get('/models', async (c) => {
 	verifiedUser(c);

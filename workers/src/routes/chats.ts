@@ -13,6 +13,7 @@ import {
 	type ChatContent,
 	type ChatRow
 } from '../lib/chats';
+import { grantsFor, replaceGrants } from '../lib/access';
 import { emitToUser } from '../lib/hub';
 import { bad, clampInt, forbidden, notFound, now, parseJSON, toJSON, uuid } from '../lib/util';
 
@@ -281,6 +282,27 @@ app.delete('/share/all', async (c) => {
 	return c.json(true);
 });
 
+app.get('/shared/:shareId/access', async (c) => {
+	verifiedUser(c);
+	const row = await c.env.DB.prepare('SELECT * FROM chat WHERE share_id = ?1')
+		.bind(c.req.param('shareId'))
+		.first<ChatRow>();
+	if (!row) throw notFound('Chat not found');
+	return c.json({ access_grants: await grantsFor(c.env, 'chat', row.id) });
+});
+
+app.post('/shared/:shareId/access/update', async (c) => {
+	const user = verifiedUser(c);
+	const row = await c.env.DB.prepare('SELECT * FROM chat WHERE share_id = ?1')
+		.bind(c.req.param('shareId'))
+		.first<ChatRow>();
+	if (!row) throw notFound('Chat not found');
+	if (row.user_id !== user.id && user.role !== 'admin') throw forbidden();
+	const body = (await c.req.json()) as { access_grants?: any[] };
+	const grants = await replaceGrants(c.env, 'chat', row.id, body.access_grants ?? []);
+	return c.json({ ...serializeChat(row), access_grants: grants });
+});
+
 app.get('/:id', async (c) => {
 	const user = currentUser(c);
 	const row = await getChat(c.env, c.req.param('id'));
@@ -506,6 +528,47 @@ app.post('/read', async (c) => {
 		.bind(now(), user.id)
 		.run();
 	return c.json(true);
+});
+
+/** Usage rollup per chat, used by Settings → Data controls → Export. */
+app.get('/stats/export', async (c) => {
+	const user = verifiedUser(c);
+	const page = clampInt(c.req.query('page'), 1, 100_000, 1);
+	const { results } = await c.env.DB.prepare(
+		`SELECT c.id, c.title, c.created_at, c.updated_at,
+			(SELECT COUNT(*) FROM chat_message m WHERE m.chat_id = c.id) AS message_count,
+			(SELECT GROUP_CONCAT(DISTINCT m.model_id) FROM chat_message m WHERE m.chat_id = c.id) AS models
+		 FROM chat c WHERE c.user_id = ?1 ORDER BY c.updated_at DESC
+		 LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`
+	)
+		.bind(user.id)
+		.all<{ id: string; title: string; message_count: number; models: string | null }>();
+	return c.json({
+		items: (results ?? []).map((row) => ({
+			...row,
+			models: (row.models ?? '').split(',').filter(Boolean)
+		})),
+		total: results?.length ?? 0
+	});
+});
+
+app.get('/stats/export/:id', async (c) => {
+	const user = verifiedUser(c);
+	const row = await getUserChat(c.env, c.req.param('id'), user.id);
+	if (!row) throw notFound('Chat not found');
+	const { results } = await c.env.DB.prepare(
+		'SELECT role, model_id, created_at, usage FROM chat_message WHERE chat_id = ?1 ORDER BY created_at ASC'
+	)
+		.bind(row.id)
+		.all();
+	return c.json({ id: row.id, title: row.title, messages: results ?? [] });
+});
+
+app.post('/:id/messages/:messageId/resolve', async (c) => {
+	// Client-side tool calls are resolved in the browser in this build; the
+	// endpoint acknowledges so the UI can continue its flow.
+	verifiedUser(c);
+	return c.json({ status: true });
 });
 
 app.get('/:id/messages/:messageId', async (c) => {

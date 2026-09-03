@@ -91,6 +91,21 @@ app.get('/id/:id/info', async (c) => {
 	return c.json(await serialize(c, row));
 });
 
+app.get('/id/:id/preview', async (c) => {
+	adminUser(c);
+	const row = await c.env.DB.prepare('SELECT * FROM "group" WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<GroupRow>();
+	if (!row) throw notFound('Group not found');
+	const { results } = await c.env.DB.prepare(
+		'SELECT u.id, u.name, u.email, u.profile_image_url FROM "user" u ' +
+			'JOIN group_member m ON m.user_id = u.id WHERE m.group_id = ?1 LIMIT 20'
+	)
+		.bind(row.id)
+		.all();
+	return c.json({ id: row.id, name: row.name, users: results ?? [] });
+});
+
 app.post('/id/:id/update', async (c) => {
 	adminUser(c);
 	const body = (await c.req.json()) as any;

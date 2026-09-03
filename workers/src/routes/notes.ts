@@ -201,4 +201,10 @@ app.get('/:id/chats', async (c) => {
 	return c.json([]);
 });
 
+app.post('/:id/chat', async (c) => {
+	// Linking a chat to a note is a client-side association in this build.
+	verifiedUser(c);
+	return c.json(true);
+});
+
 export default app;

@@ -239,6 +239,44 @@ app.post('/:id/file/remove', async (c) => {
 	return c.json(await serialize(c, row));
 });
 
+app.get('/:id/export', async (c) => {
+	const { row } = await load(c, c.req.param('id'));
+	const files = await filesFor(c, row.id);
+	return c.json({ ...(await serialize(c, row, [], false)), files });
+});
+
+app.post('/:id/file/update', async (c) => {
+	const { row } = await load(c, c.req.param('id'), 'write');
+	const { file_id } = (await c.req.json()) as { file_id: string };
+	const file = await c.env.DB.prepare('SELECT * FROM file WHERE id = ?1')
+		.bind(file_id)
+		.first<{ id: string; user_id: string; data: string }>();
+	if (!file) throw notFound('File not found');
+	const content = parseJSON<{ content?: string }>(file.data, {}).content ?? '';
+	if (content) {
+		await indexChunks(c.env, {
+			fileId: file_id,
+			knowledgeId: row.id,
+			userId: file.user_id,
+			text: content
+		});
+	}
+	return c.json(await serialize(c, row));
+});
+
+app.get('/:id/files/pending', async (c) => {
+	// Indexing happens inline on upload, so nothing is ever pending.
+	await load(c, c.req.param('id'));
+	return c.json([]);
+});
+
+app.post('/:id/file/move', async (c) => {
+	// Knowledge bases are flat in this port (no directory tree), so a move is a
+	// no-op that returns the collection unchanged.
+	const { row } = await load(c, c.req.param('id'), 'write');
+	return c.json(await serialize(c, row));
+});
+
 app.post('/:id/reset', async (c) => {
 	const { row } = await load(c, c.req.param('id'), 'write');
 	const { results } = await c.env.DB.prepare(

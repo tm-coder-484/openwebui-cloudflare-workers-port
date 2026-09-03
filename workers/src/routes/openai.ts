@@ -67,6 +67,24 @@ app.post('/verify', async (c) => {
 	return c.json(await response.json());
 });
 
+app.post('/audio/speech', async (c) => {
+	verifiedUser(c);
+	const connection = (await openaiConnections(c.env))[0];
+	if (!connection) throw bad('No OpenAI-compatible connection is configured.');
+	const response = await fetch(`${connection.url}/audio/speech`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			...(connection.key ? { Authorization: `Bearer ${connection.key}` } : {})
+		},
+		body: await c.req.text()
+	});
+	if (!response.ok) throw bad(await response.text());
+	return new Response(response.body, {
+		headers: { 'Content-Type': response.headers.get('content-type') ?? 'audio/mpeg' }
+	});
+});
+
 /**
  * Direct passthrough for API clients that speak plain OpenAI (including SSE).
  * The web UI does not use this path — it posts to /api/chat/completions.

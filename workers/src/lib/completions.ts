@@ -20,6 +20,7 @@ import {
 	extractJSON,
 	renderMessages
 } from './prompts';
+import { search } from './retrieval';
 import { HttpError, now, toJSON, uuid } from './util';
 
 /** OpenAI sampling parameters we forward; everything else is Open WebUI's own. */
@@ -289,6 +290,110 @@ function toCompletionMessage(message: ChatMessage): CompletionMessage {
 	return { role: message.role, content: text };
 }
 
+interface AttachedFile {
+	type?: string;
+	id?: string;
+	name?: string;
+	collection_name?: string;
+	content?: string;
+	file?: { id?: string; filename?: string; data?: { content?: string } };
+	[key: string]: unknown;
+}
+
+export interface FileContext {
+	context: string;
+	sources: Record<string, unknown>[];
+}
+
+/**
+ * Retrieval for files and knowledge bases attached to the request.
+ *
+ * Mirrors upstream's `<source id="n" name="...">` context block so models (and
+ * the citation UI) see the same structure, and returns the source payloads the
+ * frontend renders under the answer.
+ */
+export async function buildFileContext(
+	env: Env,
+	files: AttachedFile[],
+	query: string
+): Promise<FileContext> {
+	if (!files?.length || !query.trim()) return { context: '', sources: [] };
+
+	const fileIds: string[] = [];
+	const knowledgeIds: string[] = [];
+	const inline: { name: string; content: string }[] = [];
+
+	for (const file of files) {
+		const type = file.type ?? 'file';
+		if (type === 'collection' || type === 'knowledge') {
+			const id = file.id ?? file.collection_name;
+			if (id) knowledgeIds.push(id);
+		} else if (type === 'file') {
+			const id = file.id ?? file.file?.id;
+			if (id) fileIds.push(id);
+			// Notes, pasted text and web pages arrive with their content inline.
+			const content = file.content ?? file.file?.data?.content;
+			if (!id && typeof content === 'string' && content.trim()) {
+				inline.push({ name: String(file.name ?? 'attachment'), content });
+			}
+		} else if (typeof file.content === 'string' && file.content.trim()) {
+			inline.push({ name: String(file.name ?? type), content: file.content });
+		}
+	}
+
+	const chunks =
+		fileIds.length || knowledgeIds.length
+			? await search(env, query, { fileIds, knowledgeIds })
+			: [];
+
+	const parts: string[] = [];
+	const sources: Record<string, unknown>[] = [];
+	let index = 0;
+
+	const nameFor = (fileId: string | undefined) =>
+		files.find((file) => (file.id ?? file.file?.id) === fileId)?.name ??
+		files.find((file) => (file.id ?? file.file?.id) === fileId)?.file?.filename ??
+		'attachment';
+
+	for (const chunk of chunks) {
+		index += 1;
+		const name = nameFor(chunk.file_id);
+		parts.push(`<source id="${index}" name="${name}">${chunk.content}</source>`);
+		sources.push({
+			source: { id: chunk.file_id ?? String(index), name },
+			document: [chunk.content],
+			metadata: [{ source: chunk.file_id ?? name, name, file_id: chunk.file_id }],
+			distances: [Number((1 - chunk.score).toFixed(4))]
+		});
+	}
+
+	for (const item of inline) {
+		index += 1;
+		parts.push(`<source id="${index}" name="${item.name}">${item.content}</source>`);
+		sources.push({
+			source: { id: item.name, name: item.name },
+			document: [item.content],
+			metadata: [{ source: item.name, name: item.name }]
+		});
+	}
+
+	return { context: parts.join('\n'), sources };
+}
+
+/** Text of the last user turn — the retrieval query. */
+export function lastUserText(messages: CompletionMessage[]): string {
+	const last = [...messages].reverse().find((message) => message.role === 'user');
+	if (!last) return '';
+	if (typeof last.content === 'string') return last.content;
+	if (Array.isArray(last.content)) {
+		return (last.content as any[])
+			.map((part) => (typeof part?.text === 'string' ? part.text : ''))
+			.join(' ')
+			.trim();
+	}
+	return '';
+}
+
 export type EventEmitter = (event: Record<string, unknown>) => void | Promise<void>;
 
 export interface CompletionJob {
@@ -329,6 +434,37 @@ export async function runCompletion(
 		if (job.saveToChat && !requestMessages.some((message) => message.role !== 'system')) {
 			const history = await messagesFromChat(env, job.chatId, job.messageId);
 			job.body = { ...job.body, messages: [...requestMessages, ...history] };
+		}
+
+		// Attached files and knowledge bases become a retrieved context block.
+		const attached = (job.body.files ?? []) as AttachedFile[];
+		if (attached.length) {
+			const messages = (job.body.messages ?? []) as CompletionMessage[];
+			const { context, sources } = await buildFileContext(env, attached, lastUserText(messages));
+			if (context) {
+				job.body = {
+					...job.body,
+					messages: [
+						{
+							role: 'system',
+							content:
+								'Use the sources below to answer the user. Cite them inline as [id] when ' +
+								`you rely on them, and say so plainly if they do not contain the answer.\n\n${context}`
+						},
+						...messages
+					]
+				};
+				for (const source of sources) {
+					await emit({
+						chat_id: job.chatId,
+						message_id: job.messageId,
+						data: { type: 'source', data: source }
+					});
+				}
+				if (job.saveToChat) {
+					await upsertMessage(env, job.chatId, job.messageId, { sources });
+				}
+			}
 		}
 
 		const request = buildUpstreamRequest(resolved, job.body, { stream });

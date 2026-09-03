@@ -11,7 +11,13 @@ import {
 	visibleResourceIdsClause
 } from '../lib/access';
 import { hasPermission } from '../lib/permissions';
-import { getModelRow, listModelRows, serializeModelRow, type ModelRow } from '../lib/models';
+import {
+	getBaseModels,
+	getModelRow,
+	listModelRows,
+	serializeModelRow,
+	type ModelRow
+} from '../lib/models';
 import { DEFAULT_MODEL_IMAGE, profileImageResponse } from '../lib/images';
 import { parseJSON } from '../lib/util';
 import { bad, forbidden, notFound, now, toJSON } from '../lib/util';
@@ -62,6 +68,16 @@ app.get('/tags', async (c) => {
 	for (const row of rows) {
 		const meta = JSON.parse(row.meta ?? '{}');
 		for (const tag of meta?.tags ?? []) tags.add(typeof tag === 'string' ? tag : tag?.name);
+	}
+	return c.json([...tags].filter(Boolean).map((name) => ({ name })));
+});
+
+app.get('/base/tags', async (c) => {
+	verifiedUser(c);
+	const models = await getBaseModels(c.env);
+	const tags = new Set<string>();
+	for (const model of models) {
+		for (const tag of model.tags ?? []) tags.add(typeof tag === 'string' ? tag : tag?.name);
 	}
 	return c.json([...tags].filter(Boolean).map((name) => ({ name })));
 });

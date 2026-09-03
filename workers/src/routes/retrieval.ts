@@ -68,6 +68,49 @@ app.post('/embedding/update', async (c) => {
 	return c.json(body);
 });
 
+app.get('/reranking', async (c) => {
+	adminUser(c);
+	// Reranking needs a cross-encoder model; Workers AI does not expose one, so
+	// hybrid search falls back to the retriever's own ordering.
+	return c.json({ reranking_model: '' });
+});
+
+app.post('/reranking/update', async (c) => {
+	adminUser(c);
+	return c.json({ reranking_model: '' });
+});
+
+app.post('/reset/db', async (c) => {
+	adminUser(c);
+	await c.env.DB.batch([
+		c.env.DB.prepare('DELETE FROM file_chunk'),
+		c.env.DB.prepare('DELETE FROM knowledge_file')
+	]);
+	return c.json(true);
+});
+
+app.post('/reset/uploads', async (c) => {
+	adminUser(c);
+	const { results } = await c.env.DB.prepare('SELECT id, path FROM file').all<{
+		id: string;
+		path: string | null;
+	}>();
+	for (const row of results ?? []) {
+		if (row.path) await c.env.FILES.delete(row.path).catch(() => {});
+	}
+	await c.env.DB.batch([
+		c.env.DB.prepare('DELETE FROM file_chunk'),
+		c.env.DB.prepare('DELETE FROM knowledge_file'),
+		c.env.DB.prepare('DELETE FROM file')
+	]);
+	return c.json(true);
+});
+
+app.post('/process/youtube', async (c) => {
+	verifiedUser(c);
+	throw bad('YouTube transcript ingestion is not available in the Cloudflare Workers build.');
+});
+
 app.get('/query/settings', async (c) => {
 	adminUser(c);
 	const config = await getConfigMany(c.env, ['rag.top_k', 'rag.template', 'rag.hybrid_search']);

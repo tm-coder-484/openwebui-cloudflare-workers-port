@@ -3,7 +3,8 @@
 import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { verifiedUser } from '../lib/auth';
-import { bad, notFound, now, parseJSON, toBool, toJSON, uuid } from '../lib/util';
+import { hasAccess, replaceGrants } from '../lib/access';
+import { bad, forbidden, notFound, now, parseJSON, toBool, toJSON, uuid } from '../lib/util';
 
 const app = new Hono<AppContext>({ strict: false });
 
@@ -129,6 +130,35 @@ app.post('/:id/read', async (c) => {
 		.bind(now(), c.req.param('id'), user.id)
 		.run();
 	return c.json(true);
+});
+
+app.post('/:id/access/update', async (c) => {
+	const user = verifiedUser(c);
+	const body = (await c.req.json()) as { access_grants?: any[] };
+	const row = await c.env.DB.prepare('SELECT * FROM folder WHERE id = ?1 AND user_id = ?2')
+		.bind(c.req.param('id'), user.id)
+		.first<FolderRow>();
+	if (!row) throw notFound('Folder not found');
+	const grants = await replaceGrants(c.env, 'folder', row.id, body.access_grants ?? []);
+	return c.json({ ...serialize(row), access_grants: grants });
+});
+
+app.get('/:id/shared/chats', async (c) => {
+	const user = verifiedUser(c);
+	const id = c.req.param('id');
+	const folder = await c.env.DB.prepare('SELECT * FROM folder WHERE id = ?1')
+		.bind(id)
+		.first<FolderRow>();
+	if (!folder) throw notFound('Folder not found');
+	if (folder.user_id !== user.id && !(await hasAccess(c.env, user, 'folder', id, folder.user_id))) {
+		throw forbidden();
+	}
+	const { results } = await c.env.DB.prepare(
+		'SELECT id, title, updated_at, created_at FROM chat WHERE folder_id = ?1 AND archived = 0 ORDER BY updated_at DESC'
+	)
+		.bind(id)
+		.all();
+	return c.json(results ?? []);
 });
 
 app.delete('/:id', async (c) => {

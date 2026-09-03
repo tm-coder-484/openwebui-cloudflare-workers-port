@@ -192,6 +192,62 @@ app.post('/id/:command{.+}/access/update', async (c) => {
 	return c.json(serialize(row, grants));
 });
 
+app.post('/id/:command{.+}/toggle', async (c) => {
+	const user = verifiedUser(c);
+	const command = c.req
+		.param('command')
+		.replace(/^\//, '')
+		.replace(/\/toggle$/, '');
+	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE command = ?1')
+		.bind(command)
+		.first<PromptRow>();
+	if (!row) throw notFound('Prompt not found');
+	if (!(await hasAccess(c.env, user, 'prompt', row.id, row.user_id, 'write'))) throw forbidden();
+	await c.env.DB.prepare('UPDATE prompt SET is_active = ?1, updated_at = ?2 WHERE id = ?3')
+		.bind(row.is_active ? 0 : 1, now(), row.id)
+		.run();
+	const updated = await c.env.DB.prepare('SELECT * FROM prompt WHERE id = ?1')
+		.bind(row.id)
+		.first<PromptRow>();
+	return c.json(serialize(updated!));
+});
+
+app.post('/id/:command{.+}/update/meta', async (c) => {
+	const user = verifiedUser(c);
+	const command = c.req
+		.param('command')
+		.replace(/^\//, '')
+		.replace(/\/update\/meta$/, '');
+	const body = (await c.req.json()) as any;
+	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE command = ?1')
+		.bind(command)
+		.first<PromptRow>();
+	if (!row) throw notFound('Prompt not found');
+	if (!(await hasAccess(c.env, user, 'prompt', row.id, row.user_id, 'write'))) throw forbidden();
+	await c.env.DB.prepare(
+		'UPDATE prompt SET name = ?1, meta = ?2, tags = ?3, updated_at = ?4 WHERE id = ?5'
+	)
+		.bind(
+			body.title ?? row.name,
+			toJSON(body.meta ?? parseJSON(row.meta, {})),
+			toJSON(body.tags ?? parseJSON(row.tags, [])),
+			now(),
+			row.id
+		)
+		.run();
+	const updated = await c.env.DB.prepare('SELECT * FROM prompt WHERE id = ?1')
+		.bind(row.id)
+		.first<PromptRow>();
+	return c.json(serialize(updated!));
+});
+
+// Prompt version history is not tracked in this port; the UI treats an empty
+// list as "no previous versions" and hides the history panel.
+app.get('/id/:command{.+}/history', async (c) => {
+	verifiedUser(c);
+	return c.json({ items: [], total: 0 });
+});
+
 app.delete('/id/:command{.+}/delete', async (c) => {
 	const user = verifiedUser(c);
 	const command = c.req

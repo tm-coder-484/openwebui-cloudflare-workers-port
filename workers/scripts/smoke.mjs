@@ -355,6 +355,42 @@ if (models.data?.length) {
 	console.log('  ! no models configured — completion check skipped');
 }
 
+// --- Retrieval in a completion -------------------------------------------
+if (fileId && models.data?.length) {
+	console.log('\nfile context');
+	await check('attach a file to a completion and receive citations', async () => {
+		const socket = await connectSocket(token);
+		try {
+			const messageId = crypto.randomUUID();
+			const done = socket.waitFor(messageId);
+			await api('/api/chat/completions', {
+				method: 'POST',
+				body: JSON.stringify({
+					stream: true,
+					model: models.data[0].id,
+					messages: [{ role: 'user', content: 'What runs at the edge?' }],
+					files: [{ type: 'file', id: fileId, name: 'smoke.txt' }],
+					id: messageId,
+					parent_id: null,
+					session_id: socket.sid,
+					user_message: {
+						id: crypto.randomUUID(),
+						parentId: null,
+						childrenIds: [],
+						role: 'user',
+						content: 'What runs at the edge?'
+					},
+					background_tasks: {}
+				})
+			});
+			await done;
+			assert(socket.sourcesSeen() > 0, 'no source events were emitted');
+		} finally {
+			socket.close();
+		}
+	});
+}
+
 // --- Admin ----------------------------------------------------------------
 if (isAdmin) {
 	console.log('\nadmin');
@@ -405,6 +441,7 @@ async function connectSocket(authToken) {
 	const listeners = new Map();
 	const channelListeners = new Map();
 	let sid = null;
+	let sources = 0;
 
 	await new Promise((resolve, reject) => {
 		const timer = setTimeout(() => reject(new Error('socket connect timed out')), 15000);
@@ -434,6 +471,7 @@ async function connectSocket(authToken) {
 					return;
 				}
 				if (name !== 'events') return;
+				if (payload.data?.type === 'source') sources += 1;
 				const handler = listeners.get(payload.message_id);
 				if (handler) handler(payload);
 			}
@@ -463,6 +501,9 @@ async function connectSocket(authToken) {
 					}
 				});
 			});
+		},
+		sourcesSeen() {
+			return sources;
 		},
 		waitForChannel(channelId) {
 			return new Promise((resolve, reject) => {

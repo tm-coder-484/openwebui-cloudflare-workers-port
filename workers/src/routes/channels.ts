@@ -407,6 +407,34 @@ const reaction = (add: boolean) => async (c: any) => {
 app.post('/:id/messages/:messageId/reactions/add', reaction(true));
 app.post('/:id/messages/:messageId/reactions/remove', reaction(false));
 
+app.post('/:id/messages/:messageId/pin', async (c) => {
+	const { row, user } = await loadChannel(c, c.req.param('id'), 'write');
+	const messageId = c.req.param('messageId');
+	const message = await c.env.DB.prepare('SELECT * FROM message WHERE id = ?1 AND channel_id = ?2')
+		.bind(messageId, row.id)
+		.first<MessageRow>();
+	if (!message) throw notFound('Message not found');
+	const pinned = message.is_pinned ? 0 : 1;
+	await c.env.DB.prepare(
+		'UPDATE message SET is_pinned = ?1, pinned_at = ?2, pinned_by = ?3 WHERE id = ?4'
+	)
+		.bind(pinned, pinned ? now() : null, pinned ? user.id : null, messageId)
+		.run();
+	const updated = await c.env.DB.prepare('SELECT * FROM message WHERE id = ?1')
+		.bind(messageId)
+		.first<MessageRow>();
+	return c.json(await serializeMessage(c, updated!));
+});
+
+app.get('/:id/messages/:messageId/data', async (c) => {
+	await loadChannel(c, c.req.param('id'));
+	const message = await c.env.DB.prepare('SELECT data FROM message WHERE id = ?1')
+		.bind(c.req.param('messageId'))
+		.first<{ data: string | null }>();
+	if (!message) throw notFound('Message not found');
+	return c.json(parseJSON<Record<string, unknown>>(message.data, {}));
+});
+
 app.get('/:id/members', async (c) => {
 	const { row } = await loadChannel(c, c.req.param('id'));
 	const { results } = await c.env.DB.prepare(

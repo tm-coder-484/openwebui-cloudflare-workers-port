@@ -42,18 +42,12 @@ const TEXT_EXTENSIONS =
 const isTextFile = (filename: string, contentType: string) =>
 	TEXT_TYPES.test(contentType) || TEXT_EXTENSIONS.test(filename);
 
-app.post('/', async (c) => {
-	const user = verifiedUser(c);
-	const form = await c.req.formData();
-	const file = form.get('file') as unknown as File | null;
-	if (!file || typeof file === 'string' || typeof file.arrayBuffer !== 'function') {
-		throw bad('No file was uploaded.');
-	}
-
+/** Stores one upload in R2, records it in D1, and indexes any text content. */
+async function storeUpload(c: any, userId: string, file: File, collectionName = '') {
 	const id = uuid();
 	const buffer = await file.arrayBuffer();
 	const hash = await sha256Hex(buffer);
-	const key = `${user.id}/${id}/${file.name}`;
+	const key = `${userId}/${id}/${file.name}`;
 	const contentType = file.type || 'application/octet-stream';
 
 	await c.env.FILES.put(key, buffer, { httpMetadata: { contentType } });
@@ -63,31 +57,54 @@ app.post('/', async (c) => {
 		name: file.name,
 		content_type: contentType,
 		size: file.size,
-		collection_name: (form.get('collection_name') as string) ?? undefined
+		...(collectionName ? { collection_name: collectionName } : {})
 	};
 
-	let content = '';
-	if (isTextFile(file.name, contentType)) {
-		content = new TextDecoder().decode(buffer);
-	}
+	const content = isTextFile(file.name, contentType) ? new TextDecoder().decode(buffer) : '';
 
 	await c.env.DB.prepare(
 		`INSERT INTO file (id, user_id, hash, filename, path, data, meta, created_at, updated_at)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)`
 	)
-		.bind(id, user.id, hash, file.name, key, toJSON({ content }), toJSON(meta), timestamp)
+		.bind(id, userId, hash, file.name, key, toJSON({ content }), toJSON(meta), timestamp)
 		.run();
 
 	if (content) {
 		c.executionCtx?.waitUntil?.(
-			indexChunks(c.env, { fileId: id, userId: user.id, text: content }).catch((error) =>
+			indexChunks(c.env, { fileId: id, userId, text: content }).catch((error: unknown) =>
 				console.warn('[open-webui] indexing failed:', error)
 			)
 		);
 	}
 
-	const row = await c.env.DB.prepare('SELECT * FROM file WHERE id = ?1').bind(id).first<FileRow>();
-	return c.json(serialize(row!));
+	const row = (await c.env.DB.prepare('SELECT * FROM file WHERE id = ?1')
+		.bind(id)
+		.first()) as FileRow;
+	return serialize(row);
+}
+
+app.post('/', async (c) => {
+	const user = verifiedUser(c);
+	const form = await c.req.formData();
+	const file = form.get('file') as unknown as File | null;
+	if (!file || typeof file === 'string' || typeof file.arrayBuffer !== 'function') {
+		throw bad('No file was uploaded.');
+	}
+	return c.json(await storeUpload(c, user.id, file, (form.get('collection_name') as string) ?? ''));
+});
+
+/** Directory upload: the browser posts several files under the same field. */
+app.post('/upload/dir', async (c) => {
+	const user = verifiedUser(c);
+	const form = await c.req.formData();
+	const entries = form.getAll('files').concat(form.getAll('file')) as unknown as File[];
+	const uploaded = [];
+	for (const file of entries) {
+		if (!file || typeof (file as any).arrayBuffer !== 'function') continue;
+		uploaded.push(await storeUpload(c, user.id, file, (form.get('path') as string) ?? ''));
+	}
+	if (!uploaded.length) throw bad('No files were uploaded.');
+	return c.json(uploaded);
 });
 
 app.get('/', async (c) => {
