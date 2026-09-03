@@ -57,7 +57,7 @@ if not exist workers\.dev.vars (
 )
 
 echo ==^> Applying D1 migrations to the local database
-call npm --prefix workers exec -- wrangler d1 migrations apply open-webui --local || exit /b 1
+call npm --prefix workers run db:local || exit /b 1
 
 if "%MOCK%"=="1" (
 	echo ==^> Starting the mock model server on http://127.0.0.1:11435/v1

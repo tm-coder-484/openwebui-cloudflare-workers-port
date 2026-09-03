@@ -21,7 +21,9 @@ for arg in "$@"; do
 done
 
 step() { printf '\n\033[1;36m==>\033[0m %s\n' "$1"; }
-wrangler() { npm --prefix workers exec -- wrangler "$@"; }
+# wrangler resolves bindings and migrations relative to its config, so always
+# run it from the workers/ directory.
+wrangler() { (cd "$ROOT_DIR/workers" && npx wrangler "$@"); }
 
 [ -d workers/node_modules ] || npm --prefix workers install --no-audit --no-fund
 [ -d node_modules ] || CYPRESS_INSTALL_BINARY=0 npm install --no-audit --no-fund

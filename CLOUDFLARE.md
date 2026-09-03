@@ -55,12 +55,14 @@ Prefer doing it by hand?
 ```bash
 npm install && npm --prefix workers install
 
+cd workers
 npx wrangler d1 create open-webui             # copy the id into wrangler.toml
 npx wrangler kv namespace create CACHE        # copy the id into wrangler.toml
 npx wrangler r2 bucket create open-webui-files
+cd ..
 
-npm --prefix workers exec -- wrangler d1 migrations apply open-webui --remote
-npx wrangler secret put WEBUI_SECRET_KEY --cwd workers
+npm --prefix workers run db:remote
+(cd workers && npx wrangler secret put WEBUI_SECRET_KEY)
 
 npm run build:workers                          # SvelteKit -> ./build
 npm --prefix workers run deploy
@@ -202,20 +204,20 @@ extra services.
 **Migrations**
 
 ```bash
-npm --prefix workers exec -- wrangler d1 migrations apply open-webui --local
-npm --prefix workers exec -- wrangler d1 migrations apply open-webui --remote
+npm --prefix workers run db:local
+npm --prefix workers run db:remote
 ```
 
 **Backups**
 
 ```bash
-npx wrangler d1 export open-webui --remote --output backup.sql
+(cd workers && npx wrangler d1 export open-webui --remote --output ../backup.sql)
 ```
 
 **Logs**
 
 ```bash
-npm --prefix workers exec -- wrangler tail
+(cd workers && npx wrangler tail)
 ```
 
 **Tests**

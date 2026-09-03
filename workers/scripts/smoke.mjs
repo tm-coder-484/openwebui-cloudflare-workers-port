@@ -302,6 +302,55 @@ if (models.data?.length) {
 			socket.close();
 		}
 	});
+	// Two models answering the same prompt write into one chat document
+	// concurrently — this catches regressions in the atomic message merge.
+	await check('run two models side by side without losing either answer', async () => {
+		const socket = await connectSocket(token);
+		try {
+			const first = crypto.randomUUID();
+			const second = crypto.randomUUID();
+			const userMessageId = crypto.randomUUID();
+			const secondModelId = models.data[1]?.id ?? modelId;
+			const bothDone = Promise.all([socket.waitFor(first), socket.waitFor(second)]);
+
+			const response = await api('/api/chat/completions', {
+				method: 'POST',
+				body: JSON.stringify({
+					stream: true,
+					model: modelId,
+					messages: [{ role: 'user', content: 'Say hello twice.' }],
+					message_ids: [
+						{ model_id: modelId, message_id: first },
+						{ model_id: secondModelId, message_id: second }
+					],
+					parent_id: null,
+					session_id: socket.sid,
+					user_message: {
+						id: userMessageId,
+						parentId: null,
+						childrenIds: [],
+						role: 'user',
+						content: 'Say hello twice.'
+					},
+					background_tasks: {}
+				})
+			});
+			assert(response.task_ids.length === 2, 'expected two tasks');
+			await bothDone;
+
+			const chat = await api(`/api/v1/chats/${response.chat_id}`);
+			const stored = Object.values(chat.chat.history.messages).filter(
+				(message) => message.role === 'assistant'
+			);
+			assert(stored.length === 2, `expected 2 assistant messages, got ${stored.length}`);
+			for (const message of stored) {
+				assert((message.content ?? '').length > 0, `message ${message.id} lost its content`);
+			}
+			await api(`/api/v1/chats/${response.chat_id}`, { method: 'DELETE' });
+		} finally {
+			socket.close();
+		}
+	});
 } else {
 	console.log('  ! no models configured — completion check skipped');
 }

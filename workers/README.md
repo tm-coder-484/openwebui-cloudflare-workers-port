@@ -18,8 +18,9 @@ npm run smoke                # end-to-end API smoke test against a running deplo
 node scripts/mock-openai.mjs # offline OpenAI-compatible model server
 ```
 
-From the repository root, `./start-workers.sh --mock` does all of the above in
-one step.
+Run wrangler from this directory (it resolves bindings, migrations and the
+assets path relative to `wrangler.toml`). From the repository root,
+`./start-workers.sh --mock` does all of the above in one step.
 
 ## Source map
 

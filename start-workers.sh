@@ -59,7 +59,7 @@ VARS
 fi
 
 step "Applying D1 migrations to the local database"
-npm --prefix workers exec -- wrangler d1 migrations apply open-webui --local
+npm --prefix workers run db:local
 
 MOCK_PID=""
 if [ "$MOCK" = "1" ]; then

@@ -162,29 +162,34 @@ export function createMessagesList(
 	return [...parents, message];
 }
 
-/** Merge a partial message into the chat's history (upstream: upsert_message_to_chat). */
+/**
+ * Merge a partial message into the chat's history.
+ *
+ * Uses SQLite's `json_patch` (RFC 7396 merge) so that two models streaming into
+ * the same chat side by side cannot clobber each other: each write touches only
+ * its own message subtree instead of rewriting the whole document. Note that a
+ * merge patch treats `null` as "delete this key", so null fields are dropped
+ * rather than written.
+ */
 export async function upsertMessage(
 	env: Env,
 	chatId: string,
 	messageId: string,
 	patch: Record<string, unknown>
 ): Promise<void> {
-	const row = await getChat(env, chatId);
-	if (!row) return;
-	const content = parseJSON<ChatContent>(row.chat, {});
-	const history = content.history ?? { currentId: null, messages: {} };
-	const existing = history.messages[messageId] ?? {
-		id: messageId,
-		parentId: null,
-		childrenIds: [],
-		role: 'assistant',
-		content: ''
-	};
-	history.messages[messageId] = { ...existing, ...patch } as ChatMessage;
-	if (!history.currentId) history.currentId = messageId;
-	content.history = history;
-	content.messages = createMessagesList(history, history.currentId);
-	await updateChatContent(env, chatId, content, { current_message_id: history.currentId });
+	const fields: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(patch)) {
+		if (value === undefined || value === null) continue;
+		fields[key] = value;
+	}
+	if (!Object.keys(fields).length) return;
+
+	const document = { history: { messages: { [messageId]: fields } } };
+	await env.DB.prepare(
+		`UPDATE chat SET chat = json_patch(COALESCE(chat, '{}'), ?1), updated_at = ?2 WHERE id = ?3`
+	)
+		.bind(JSON.stringify(document), now(), chatId)
+		.run();
 }
 
 export async function getMessage(
@@ -199,12 +204,11 @@ export async function getMessage(
 }
 
 export async function setChatTitle(env: Env, chatId: string, title: string): Promise<void> {
-	const row = await getChat(env, chatId);
-	if (!row) return;
-	const content = parseJSON<ChatContent>(row.chat, {});
-	content.title = title;
-	await env.DB.prepare('UPDATE chat SET title = ?1, chat = ?2, updated_at = ?3 WHERE id = ?4')
-		.bind(title, toJSON(content), now(), chatId)
+	await env.DB.prepare(
+		`UPDATE chat SET title = ?1, chat = json_patch(COALESCE(chat, '{}'), ?2), updated_at = ?3
+		 WHERE id = ?4`
+	)
+		.bind(title, JSON.stringify({ title }), now(), chatId)
 		.run();
 }
 
