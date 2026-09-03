@@ -14,7 +14,9 @@ vite.config.ts.timestamp-*
 __pycache__/
 *.py[cod]
 *$py.class
-.nvmrc
+# .nvmrc is deliberately committed: Cloudflare Workers Builds and CI read it,
+# and the root .npmrc sets engine-strict against an engines range capped at
+# Node 22, so an unpinned build image fails `npm ci` outright.
 CLAUDE.md
 # C extensions
 *.so
