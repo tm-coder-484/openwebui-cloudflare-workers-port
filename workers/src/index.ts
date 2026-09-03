@@ -8,9 +8,10 @@
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import type { AppContext } from './types';
+import type { AppContext, Env } from './types';
 import { authenticate } from './lib/auth';
 import { HttpError, resolveAllowedOrigin } from './lib/util';
+import { runDueAutomations } from './lib/automations';
 
 import main from './routes/main';
 import auths from './routes/auths';
@@ -30,6 +31,7 @@ import tools from './routes/tools';
 import functions from './routes/functions';
 import evaluations from './routes/evaluations';
 import analytics from './routes/analytics';
+import automations from './routes/automations';
 import notifications from './routes/notifications';
 import tasks from './routes/tasks';
 import utils from './routes/utils';
@@ -83,6 +85,7 @@ app.route('/api/v1/terminals', terminals);
 app.route('/api/v1/functions', functions);
 app.route('/api/v1/evaluations', evaluations);
 app.route('/api/v1/analytics', analytics);
+app.route('/api/v1/automations', automations);
 app.route('/api/v1/notifications', notifications);
 app.route('/api/v1/tasks', tasks);
 app.route('/api/v1/utils', utils);
@@ -129,4 +132,19 @@ app.notFound(async (c) => {
 	return c.text('Not Found', 404);
 });
 
-export default app;
+/**
+ * Cron Trigger entry point. Scheduled automations are the Workers-native
+ * replacement for the Python scheduler loop.
+ */
+async function scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+	ctx.waitUntil(
+		runDueAutomations(env).catch((error) =>
+			console.error('[open-webui] scheduled run failed', error)
+		)
+	);
+}
+
+export default {
+	fetch: app.fetch,
+	scheduled
+};

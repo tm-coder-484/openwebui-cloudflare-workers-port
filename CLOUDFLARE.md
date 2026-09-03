@@ -191,6 +191,25 @@ Without Vectorize, retrieval falls back to TF-IDF-style keyword scoring over the
 chunks stored in D1 — good enough for small knowledge bases, and it needs no
 extra services.
 
+### Automations
+
+Scheduled prompts run on a Cloudflare **Cron Trigger** (`crons = ["* * * * *"]`
+in `wrangler.toml`). Every minute the Worker looks for automations whose next
+run has come due, creates a chat, and runs the prompt through the normal
+completion pipeline — so the result is a regular conversation, streamed and
+persisted like any other.
+
+Schedules are iCalendar `RRULE` strings (`FREQ`, `INTERVAL`, `BYDAY`, `BYHOUR`,
+`BYMINUTE`, `BYMONTHDAY`, `COUNT=1`, `UNTIL`), evaluated in the owner's
+timezone so "every day at 09:00" means 09:00 where they are. Failures are
+recorded as runs and never block the next occurrence.
+
+To fire the trigger by hand while developing:
+
+```bash
+curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=*+*+*+*+*"
+```
+
 ### Web search
 
 Enable it under **Admin Settings → Web Search**, or with the config API. Five
@@ -223,6 +242,7 @@ citations.
 - Workspace: models (presets and overrides), prompts, knowledge, skills
 - Files in R2 with text extraction, chunking and retrieval
 - Notes (with realtime collaboration relay) and Channels (realtime messaging)
+- Automations: scheduled prompts driven by a Cron Trigger, with run history
 - Memories, feedback/evaluations, admin usage analytics
 - Web search in chat (DuckDuckGo, SearXNG, Tavily, Serper, Brave) with page
   retrieval, status updates and citations

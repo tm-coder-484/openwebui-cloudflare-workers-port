@@ -81,7 +81,7 @@ export const DEFAULT_USER_PERMISSIONS = {
 		image_generation: true,
 		code_interpreter: true,
 		memories: true,
-		automations: false,
+		automations: true,
 		calendar: false,
 		webhooks: false
 	},
@@ -137,7 +137,7 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'folders.max_file_count': null,
 	'channels.enable': true,
 	'calendar.enable': false,
-	'automations.enable': false,
+	'automations.enable': true,
 	'notes.enable': true,
 	'memories.enable': true,
 	'users.enable_status': true,

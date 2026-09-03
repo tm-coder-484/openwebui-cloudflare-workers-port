@@ -22,6 +22,10 @@ run_worker_first = [
   "/cache/*"
 ]
 
+# Runs scheduled automations. Cloudflare's minimum granularity is one minute.
+[triggers]
+crons = ["* * * * *"]
+
 [observability]
 enabled = true
 
