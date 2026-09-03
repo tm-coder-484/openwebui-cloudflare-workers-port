@@ -130,11 +130,25 @@ Secrets**, add:
 | `WEBUI_SECRET_KEY` | any long random string — it signs session tokens               |
 | `NVIDIA_API_KEY`   | your NIM key from [build.nvidia.com](https://build.nvidia.com) |
 
-Mark both as **Secret** rather than plaintext. Also edit the `WEBUI_URL`
-variable to your real URL (`https://open-webui.<subdomain>.workers.dev`, or your
-custom domain) so OAuth redirects and share links point at the right host.
+Mark both as **Secret** rather than plaintext. `WEBUI_SECRET_KEY` is not
+optional: without it the Worker falls back to a signing key that is a constant
+in this public repository, so anyone could forge a session token for your
+deployment. It warns in the logs when it does this.
 
-**7. Open it and create your account.** The **first** account to sign up becomes
+You do **not** need to set a URL. OAuth callbacks and the post-login redirect
+are derived from the origin of the incoming request, so they follow whatever
+hostname the Worker is reached on — `workers.dev` and a custom domain both work
+without configuration. To pin them to one host anyway, set it in **Admin
+Settings → General → WEBUI_URL** (stored in the database), not as a plaintext
+variable: `[vars]` in `wrangler.toml` is reapplied on every deploy, so a
+dashboard edit to one is reverted by your next push.
+
+**7. Add your domain** (optional). The Worker's **Settings** → **Domains &
+Routes** → **Add** → **Custom domain**. The domain has to be a zone in the same
+Cloudflare account; the subdomain record is created for you. Nothing in the app
+needs changing — see step 6.
+
+**8. Open it and create your account.** The **first** account to sign up becomes
 the administrator, so do this before sharing the URL with anyone.
 
 Redeploys are automatic on every push to the connected branch.
