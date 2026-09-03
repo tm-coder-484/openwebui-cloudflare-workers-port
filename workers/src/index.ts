@@ -97,6 +97,19 @@ app.onError((err, c) => {
 	if (err instanceof HttpError) {
 		return c.json({ detail: err.message }, err.status as 400);
 	}
+	// A missing table means the D1 migrations were never applied — say so
+	// instead of returning an opaque 500 on the very first request.
+	if (/no such table|D1_ERROR.*no such table/i.test(err.message ?? '')) {
+		console.error('[open-webui] database not initialised', err);
+		return c.json(
+			{
+				detail:
+					'The database is not initialised. Apply the D1 migrations: ' +
+					'`npm --prefix workers run db:remote` (or `db:local` for wrangler dev).'
+			},
+			503
+		);
+	}
 	console.error('[open-webui] unhandled error', err);
 	return c.json({ detail: 'Internal server error' }, 500);
 });

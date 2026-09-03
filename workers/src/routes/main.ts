@@ -21,8 +21,11 @@ const isSavedChatId = (chatId: string | null | undefined): boolean =>
 
 app.get('/health', (c) => c.json({ status: true }));
 app.get('/health/db', async (c) => {
-	await c.env.DB.prepare('SELECT 1').first();
-	return c.json({ status: true });
+	// Confirms both connectivity and that migrations have been applied.
+	const row = await c.env.DB.prepare('SELECT COUNT(*) AS count FROM "user"').first<{
+		count: number;
+	}>();
+	return c.json({ status: true, users: row?.count ?? 0 });
 });
 
 app.get('/api/version', (c) => c.json({ version: WEBUI_VERSION }));
