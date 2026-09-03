@@ -13,25 +13,8 @@ import {
 	verifyPassword
 } from '../lib/crypto';
 import { resolvePermissions } from '../lib/permissions';
-import {
-	countUsers,
-	getUserByEmail,
-	getUserById,
-	hasUsers,
-	insertUser,
-	serializeUser,
-	updateUser
-} from '../lib/users';
-import {
-	bad,
-	forbidden,
-	notFound,
-	now,
-	parseDuration,
-	unauthorized,
-	uuid,
-	validateEmail
-} from '../lib/util';
+import { getUserByEmail, hasUsers, insertUser, serializeUser, updateUser } from '../lib/users';
+import { bad, forbidden, notFound, now, parseDuration, uuid, validateEmail } from '../lib/util';
 
 const app = new Hono<AppContext>({ strict: false });
 

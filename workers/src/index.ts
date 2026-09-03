@@ -10,7 +10,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { AppContext } from './types';
 import { authenticate } from './lib/auth';
-import { HttpError } from './lib/util';
+import { HttpError, resolveAllowedOrigin } from './lib/util';
 
 import main from './routes/main';
 import auths from './routes/auths';
@@ -46,7 +46,18 @@ export { SocketHub } from './socket/hub';
 
 const app = new Hono<AppContext>({ strict: false });
 
-app.use('*', cors({ origin: (origin) => origin ?? '*', credentials: true }));
+/**
+ * CORS mirrors upstream's default (`CORS_ALLOW_ORIGIN=*`, credentials allowed);
+ * set `CORS_ALLOW_ORIGIN` to a `;`-separated allowlist to lock it down. The
+ * session cookie is SameSite=Lax, so it is not sent on cross-site requests
+ * regardless — cross-origin API clients authenticate with a Bearer token.
+ */
+app.use('*', (c, next) =>
+	cors({
+		origin: (origin) => resolveAllowedOrigin(c.env.CORS_ALLOW_ORIGIN, origin),
+		credentials: true
+	})(c, next)
+);
 app.use('*', authenticate);
 
 // Realtime transport (socket.io) — must be registered before the API groups so

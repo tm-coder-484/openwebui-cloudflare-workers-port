@@ -100,6 +100,19 @@ export function parseDuration(value: string | null | undefined): number | null {
 export const validateEmail = (email: string): boolean =>
 	/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
 
+/**
+ * CORS origin resolution. `*` (the default) reflects whatever origin asked;
+ * otherwise only origins in the `;`- or `,`-separated allowlist are echoed.
+ */
+export function resolveAllowedOrigin(
+	configured: string | undefined | null,
+	origin: string | undefined
+): string {
+	const allowed = csv((configured ?? '*').replace(/;/g, ','));
+	if (!allowed.length || allowed.includes('*')) return origin ?? '*';
+	return origin && allowed.includes(origin) ? origin : '';
+}
+
 export const csv = (value: string | undefined | null): string[] =>
 	(value ?? '')
 		.split(/[,;]/)

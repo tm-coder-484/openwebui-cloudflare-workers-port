@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	clampInt,
 	csv,
+	resolveAllowedOrigin,
 	deepMerge,
 	getPath,
 	parseDuration,
@@ -74,6 +75,16 @@ describe('coercion helpers', () => {
 	it('splits comma separated env vars', () => {
 		expect(csv('a, b ,c')).toEqual(['a', 'b', 'c']);
 		expect(csv(undefined)).toEqual([]);
+	});
+
+	it('resolves CORS origins', () => {
+		expect(resolveAllowedOrigin('*', 'https://a.example')).toBe('https://a.example');
+		expect(resolveAllowedOrigin(undefined, 'https://a.example')).toBe('https://a.example');
+		expect(resolveAllowedOrigin('https://a.example;https://b.example', 'https://b.example')).toBe(
+			'https://b.example'
+		);
+		expect(resolveAllowedOrigin('https://a.example', 'https://evil.example')).toBe('');
+		expect(resolveAllowedOrigin('https://a.example', undefined)).toBe('');
 	});
 
 	it('validates emails', () => {

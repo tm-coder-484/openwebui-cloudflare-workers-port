@@ -1,17 +1,15 @@
 /** Root API surface: config, version, models, and chat completions. */
 
 import { Hono } from 'hono';
-import { setCookie } from 'hono/cookie';
 import type { AppContext } from '../types';
 import { adminUser, verifiedUser } from '../lib/auth';
 import { getConfigMany, getUserPermissions } from '../lib/config';
-import { resolvePermissions } from '../lib/permissions';
-import { countUsers, hasUsers } from '../lib/users';
+import { hasUsers } from '../lib/users';
 import { WEBUI_VERSION } from '../lib/version';
 import { getAllModels, getBaseModels, filterModelsForUser } from '../lib/models';
 import { insertChat, getUserChat, upsertMessage, type ChatContent } from '../lib/chats';
 import { hubStats, startCompletion, emitToUser } from '../lib/hub';
-import { HttpError, bad, notFound, now, uuid } from '../lib/util';
+import { bad, notFound, now, uuid } from '../lib/util';
 
 const app = new Hono<AppContext>({ strict: false });
 

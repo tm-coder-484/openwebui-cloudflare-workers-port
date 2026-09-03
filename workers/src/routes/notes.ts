@@ -11,7 +11,7 @@ import {
 	visibleResourceIdsClause
 } from '../lib/access';
 import { hasPermission } from '../lib/permissions';
-import { bad, clampInt, forbidden, notFound, now, parseJSON, toJSON, uuid } from '../lib/util';
+import { clampInt, forbidden, notFound, now, parseJSON, toJSON, uuid } from '../lib/util';
 
 const app = new Hono<AppContext>({ strict: false });
 

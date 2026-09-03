@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono';
 import type { AppContext } from '../types';
-import { adminUser, currentUser, verifiedUser } from '../lib/auth';
+import { adminUser, verifiedUser } from '../lib/auth';
 import { hasAccess } from '../lib/access';
 import { indexChunks, removeChunks } from '../lib/retrieval';
 import { sha256Hex } from '../lib/crypto';
@@ -146,7 +146,7 @@ app.get('/search', async (c) => {
 });
 
 async function loadFile(c: any, id: string): Promise<FileRow> {
-	const user = currentUser(c);
+	const user = verifiedUser(c);
 	const row = (await c.env.DB.prepare('SELECT * FROM file WHERE id = ?1')
 		.bind(id)
 		.first()) as FileRow | null;
@@ -226,17 +226,6 @@ app.get('/:id/process/status', async (c) => {
 	return c.json({ status: 'completed', chunks: chunks?.count ?? 0 });
 });
 
-app.delete('/:id', async (c) => {
-	const row = await loadFile(c, c.req.param('id'));
-	if (row.path) await c.env.FILES.delete(row.path).catch(() => {});
-	await removeChunks(c.env, row.id);
-	await c.env.DB.batch([
-		c.env.DB.prepare('DELETE FROM knowledge_file WHERE file_id = ?1').bind(row.id),
-		c.env.DB.prepare('DELETE FROM file WHERE id = ?1').bind(row.id)
-	]);
-	return c.json(true);
-});
-
 app.delete('/all', async (c) => {
 	adminUser(c);
 	const { results } = await c.env.DB.prepare('SELECT path FROM file').all<{ path: string }>();
@@ -245,6 +234,17 @@ app.delete('/all', async (c) => {
 		c.env.DB.prepare('DELETE FROM file_chunk'),
 		c.env.DB.prepare('DELETE FROM knowledge_file'),
 		c.env.DB.prepare('DELETE FROM file')
+	]);
+	return c.json(true);
+});
+
+app.delete('/:id', async (c) => {
+	const row = await loadFile(c, c.req.param('id'));
+	if (row.path) await c.env.FILES.delete(row.path).catch(() => {});
+	await removeChunks(c.env, row.id);
+	await c.env.DB.batch([
+		c.env.DB.prepare('DELETE FROM knowledge_file WHERE file_id = ?1').bind(row.id),
+		c.env.DB.prepare('DELETE FROM file WHERE id = ?1').bind(row.id)
 	]);
 	return c.json(true);
 });

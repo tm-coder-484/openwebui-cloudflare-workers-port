@@ -2,7 +2,7 @@
 
 import { Hono } from 'hono';
 import type { AppContext } from '../types';
-import { adminUser, currentUser, verifiedUser } from '../lib/auth';
+import { adminUser, verifiedUser } from '../lib/auth';
 import {
 	getChat,
 	getUserChat,
@@ -304,11 +304,60 @@ app.post('/shared/:shareId/access/update', async (c) => {
 });
 
 app.get('/:id', async (c) => {
-	const user = currentUser(c);
+	const user = verifiedUser(c);
 	const row = await getChat(c.env, c.req.param('id'));
 	if (!row) throw notFound('Chat not found');
 	if (row.user_id !== user.id && user.role !== 'admin') throw forbidden();
 	return c.json(serializeChat(row));
+});
+
+app.post('/read', async (c) => {
+	const user = verifiedUser(c);
+	await c.env.DB.prepare('UPDATE chat SET last_read_at = ?1 WHERE user_id = ?2')
+		.bind(now(), user.id)
+		.run();
+	return c.json(true);
+});
+
+/** Usage rollup per chat, used by Settings → Data controls → Export. */
+app.get('/stats/export', async (c) => {
+	const user = verifiedUser(c);
+	const page = clampInt(c.req.query('page'), 1, 100_000, 1);
+	const { results } = await c.env.DB.prepare(
+		`SELECT c.id, c.title, c.created_at, c.updated_at,
+			(SELECT COUNT(*) FROM chat_message m WHERE m.chat_id = c.id) AS message_count,
+			(SELECT GROUP_CONCAT(DISTINCT m.model_id) FROM chat_message m WHERE m.chat_id = c.id) AS models
+		 FROM chat c WHERE c.user_id = ?1 ORDER BY c.updated_at DESC
+		 LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`
+	)
+		.bind(user.id)
+		.all<{ id: string; title: string; message_count: number; models: string | null }>();
+	return c.json({
+		items: (results ?? []).map((row) => ({
+			...row,
+			models: (row.models ?? '').split(',').filter(Boolean)
+		})),
+		total: results?.length ?? 0
+	});
+});
+
+app.get('/stats/export/:id', async (c) => {
+	const user = verifiedUser(c);
+	const row = await getUserChat(c.env, c.req.param('id'), user.id);
+	if (!row) throw notFound('Chat not found');
+	const { results } = await c.env.DB.prepare(
+		'SELECT role, model_id, created_at, usage FROM chat_message WHERE chat_id = ?1 ORDER BY created_at ASC'
+	)
+		.bind(row.id)
+		.all();
+	return c.json({ id: row.id, title: row.title, messages: results ?? [] });
+});
+
+app.post('/:id/messages/:messageId/resolve', async (c) => {
+	// Client-side tool calls are resolved in the browser in this build; the
+	// endpoint acknowledges so the UI can continue its flow.
+	verifiedUser(c);
+	return c.json({ status: true });
 });
 
 app.post('/:id', async (c) => {
@@ -332,7 +381,7 @@ app.post('/:id', async (c) => {
 });
 
 app.delete('/:id', async (c) => {
-	const user = currentUser(c);
+	const user = verifiedUser(c);
 	const row = await getChat(c.env, c.req.param('id'));
 	if (!row) throw notFound('Chat not found');
 	if (row.user_id !== user.id && user.role !== 'admin') throw forbidden();
@@ -522,57 +571,8 @@ app.post('/:id/unread', async (c) => {
 	return c.json(true);
 });
 
-app.post('/read', async (c) => {
-	const user = verifiedUser(c);
-	await c.env.DB.prepare('UPDATE chat SET last_read_at = ?1 WHERE user_id = ?2')
-		.bind(now(), user.id)
-		.run();
-	return c.json(true);
-});
-
-/** Usage rollup per chat, used by Settings → Data controls → Export. */
-app.get('/stats/export', async (c) => {
-	const user = verifiedUser(c);
-	const page = clampInt(c.req.query('page'), 1, 100_000, 1);
-	const { results } = await c.env.DB.prepare(
-		`SELECT c.id, c.title, c.created_at, c.updated_at,
-			(SELECT COUNT(*) FROM chat_message m WHERE m.chat_id = c.id) AS message_count,
-			(SELECT GROUP_CONCAT(DISTINCT m.model_id) FROM chat_message m WHERE m.chat_id = c.id) AS models
-		 FROM chat c WHERE c.user_id = ?1 ORDER BY c.updated_at DESC
-		 LIMIT ${PAGE_SIZE} OFFSET ${(page - 1) * PAGE_SIZE}`
-	)
-		.bind(user.id)
-		.all<{ id: string; title: string; message_count: number; models: string | null }>();
-	return c.json({
-		items: (results ?? []).map((row) => ({
-			...row,
-			models: (row.models ?? '').split(',').filter(Boolean)
-		})),
-		total: results?.length ?? 0
-	});
-});
-
-app.get('/stats/export/:id', async (c) => {
-	const user = verifiedUser(c);
-	const row = await getUserChat(c.env, c.req.param('id'), user.id);
-	if (!row) throw notFound('Chat not found');
-	const { results } = await c.env.DB.prepare(
-		'SELECT role, model_id, created_at, usage FROM chat_message WHERE chat_id = ?1 ORDER BY created_at ASC'
-	)
-		.bind(row.id)
-		.all();
-	return c.json({ id: row.id, title: row.title, messages: results ?? [] });
-});
-
-app.post('/:id/messages/:messageId/resolve', async (c) => {
-	// Client-side tool calls are resolved in the browser in this build; the
-	// endpoint acknowledges so the UI can continue its flow.
-	verifiedUser(c);
-	return c.json({ status: true });
-});
-
 app.get('/:id/messages/:messageId', async (c) => {
-	const user = currentUser(c);
+	const user = verifiedUser(c);
 	const row = await getChat(c.env, c.req.param('id'));
 	if (!row) throw notFound('Chat not found');
 	if (row.user_id !== user.id && user.role !== 'admin') throw forbidden();

@@ -4,10 +4,8 @@ import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { adminUser, currentUser, verifiedUser } from '../lib/auth';
 import { DEFAULT_USER_PERMISSIONS, getConfig, setConfig } from '../lib/config';
-import { resolvePermissions } from '../lib/permissions';
 import { hashPassword } from '../lib/crypto';
 import {
-	countUsers,
 	deleteUser,
 	getUserById,
 	publicUser,
@@ -17,17 +15,7 @@ import {
 } from '../lib/users';
 import { hubStats } from '../lib/hub';
 import { DEFAULT_USER_IMAGE, profileImageResponse } from '../lib/images';
-import {
-	bad,
-	clampInt,
-	deepMerge,
-	forbidden,
-	notFound,
-	now,
-	parseJSON,
-	toJSON,
-	uuid
-} from '../lib/util';
+import { bad, clampInt, deepMerge, forbidden, notFound, now, parseJSON } from '../lib/util';
 
 const app = new Hono<AppContext>({ strict: false });
 const PAGE_SIZE = 30;

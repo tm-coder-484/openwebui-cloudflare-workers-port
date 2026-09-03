@@ -5,7 +5,7 @@ import type { AppContext } from '../types';
 import { adminUser, verifiedUser } from '../lib/auth';
 import { getConfigMany, setConfigMany } from '../lib/config';
 import { openaiConnections } from '../lib/models';
-import { bad, uuid } from '../lib/util';
+import { bad } from '../lib/util';
 
 const app = new Hono<AppContext>({ strict: false });
 

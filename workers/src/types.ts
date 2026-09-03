@@ -19,6 +19,7 @@ export interface Env {
 	WEBUI_URL?: string;
 	WEBUI_SECRET_KEY?: string;
 	WEBUI_AUTH?: string;
+	CORS_ALLOW_ORIGIN?: string;
 	ENABLE_SIGNUP?: string;
 	ENABLE_LOGIN_FORM?: string;
 	DEFAULT_USER_ROLE?: string;

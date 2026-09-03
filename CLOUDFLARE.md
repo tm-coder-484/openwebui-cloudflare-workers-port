@@ -137,6 +137,7 @@ Settings** in the UI. Worker vars only seed the defaults on first read.
 | `ENABLE_SIGNUP`          | Allow self-service signup after the first admin exists         |
 | `JWT_EXPIRES_IN`         | `-1` (never), or `30m`, `12h`, `7d`…                           |
 | `WEBUI_NAME`             | Branding shown in the UI                                       |
+| `CORS_ALLOW_ORIGIN`      | `*` by default; a `;`-separated allowlist locks browsers down  |
 
 Secrets go through `wrangler secret put`; plain vars can live in `[vars]` in
 `wrangler.toml`.

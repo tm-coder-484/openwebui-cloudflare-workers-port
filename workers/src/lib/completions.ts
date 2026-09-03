@@ -21,7 +21,7 @@ import {
 	renderMessages
 } from './prompts';
 import { search } from './retrieval';
-import { HttpError, now, toJSON, uuid } from './util';
+import { HttpError, now, toJSON } from './util';
 
 /** OpenAI sampling parameters we forward; everything else is Open WebUI's own. */
 const FORWARDED_PARAMS = new Set([
