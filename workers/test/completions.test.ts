@@ -10,7 +10,15 @@ import type { ResolvedModel } from '../src/lib/models';
 const openaiModel: ResolvedModel = {
 	id: 'gpt-4o',
 	upstreamId: 'gpt-4o',
-	entry: { id: 'gpt-4o', name: 'gpt-4o', object: 'model', created: 0, owned_by: 'openai', actions: [], tags: [] },
+	entry: {
+		id: 'gpt-4o',
+		name: 'gpt-4o',
+		object: 'model',
+		created: 0,
+		owned_by: 'openai',
+		actions: [],
+		tags: []
+	},
 	params: {},
 	workersAI: false,
 	connection: { url: 'https://api.example.com/v1', key: 'secret', idx: 0, config: {} }
@@ -63,7 +71,12 @@ describe('buildUpstreamRequest', () => {
 	it('merges into an existing system message rather than duplicating', () => {
 		const request = buildUpstreamRequest(
 			{ ...openaiModel, systemPrompt: 'Base.' },
-			{ messages: [{ role: 'system', content: 'Extra.' }, { role: 'user', content: 'hi' }] }
+			{
+				messages: [
+					{ role: 'system', content: 'Extra.' },
+					{ role: 'user', content: 'hi' }
+				]
+			}
 		);
 		const messages = request.payload.messages as { role: string; content: string }[];
 		expect(messages).toHaveLength(2);
@@ -72,7 +85,12 @@ describe('buildUpstreamRequest', () => {
 
 	it('routes Workers AI models to the binding', () => {
 		const request = buildUpstreamRequest(
-			{ ...openaiModel, workersAI: true, connection: undefined, upstreamId: '@cf/meta/llama-3.1-8b-instruct' },
+			{
+				...openaiModel,
+				workersAI: true,
+				connection: undefined,
+				upstreamId: '@cf/meta/llama-3.1-8b-instruct'
+			},
 			{ messages: [] }
 		);
 		expect(request.kind).toBe('workers-ai');
@@ -98,9 +116,11 @@ describe('normalizeChunk', () => {
 	});
 
 	it('carries usage through', () => {
-		expect(normalizeChunk({ choices: [{ delta: {} }], usage: { total_tokens: 7 } })?.usage).toEqual({
-			total_tokens: 7
-		});
+		expect(normalizeChunk({ choices: [{ delta: {} }], usage: { total_tokens: 7 } })?.usage).toEqual(
+			{
+				total_tokens: 7
+			}
+		);
 	});
 
 	it('ignores unknown payloads', () => {

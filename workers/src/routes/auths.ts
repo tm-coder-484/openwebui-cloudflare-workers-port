@@ -5,7 +5,13 @@ import { deleteCookie, setCookie } from 'hono/cookie';
 import type { AppContext, Env, SessionUser } from '../types';
 import { adminUser, bearerFrom, currentUser, verifiedUser } from '../lib/auth';
 import { getConfig, getConfigMany, secretKey, setConfigMany } from '../lib/config';
-import { createToken, decodeToken, generateApiKey, hashPassword, verifyPassword } from '../lib/crypto';
+import {
+	createToken,
+	decodeToken,
+	generateApiKey,
+	hashPassword,
+	verifyPassword
+} from '../lib/crypto';
 import { resolvePermissions } from '../lib/permissions';
 import {
 	countUsers,
@@ -16,7 +22,16 @@ import {
 	serializeUser,
 	updateUser
 } from '../lib/users';
-import { bad, forbidden, notFound, now, parseDuration, unauthorized, uuid, validateEmail } from '../lib/util';
+import {
+	bad,
+	forbidden,
+	notFound,
+	now,
+	parseDuration,
+	unauthorized,
+	uuid,
+	validateEmail
+} from '../lib/util';
 
 const app = new Hono<AppContext>({ strict: false });
 
@@ -274,7 +289,7 @@ app.get('/admin/details', async (c) => {
 	const config = await getConfigMany(c.env, ['auth.admin.show', 'auth.admin.email']);
 	if (!config['auth.admin.show']) return c.json({ name: null, email: null });
 	const admin = await c.env.DB.prepare(
-		"SELECT * FROM \"user\" WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1"
+		'SELECT * FROM "user" WHERE role = \'admin\' ORDER BY created_at ASC LIMIT 1'
 	).first<{ name: string; email: string }>();
 	return c.json({
 		name: admin?.name ?? null,
@@ -294,7 +309,10 @@ app.post('/admin/config', async (c) => {
 	for (const [field, key] of Object.entries(ADMIN_CONFIG_KEYS)) {
 		if (field in body) updates[key] = body[field];
 	}
-	if ('DEFAULT_USER_ROLE' in body && !['pending', 'user', 'admin'].includes(String(body.DEFAULT_USER_ROLE))) {
+	if (
+		'DEFAULT_USER_ROLE' in body &&
+		!['pending', 'user', 'admin'].includes(String(body.DEFAULT_USER_ROLE))
+	) {
 		delete updates['ui.default_user_role'];
 	}
 	if (

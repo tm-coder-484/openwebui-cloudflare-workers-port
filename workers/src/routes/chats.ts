@@ -92,7 +92,9 @@ app.get('/all/archived', async (c) => {
 
 app.get('/all/db', async (c) => {
 	adminUser(c);
-	const { results } = await c.env.DB.prepare('SELECT * FROM chat ORDER BY updated_at DESC').all<ChatRow>();
+	const { results } = await c.env.DB.prepare(
+		'SELECT * FROM chat ORDER BY updated_at DESC'
+	).all<ChatRow>();
 	return c.json((results ?? []).map(serializeChat));
 });
 
@@ -102,7 +104,10 @@ app.get('/all/tags', async (c) => {
 		.bind(user.id)
 		.all<{ id: string; user_id: string; name: string; meta: string }>();
 	return c.json(
-		(results ?? []).map((row) => ({ ...row, meta: parseJSON<Record<string, unknown>>(row.meta, {}) }))
+		(results ?? []).map((row) => ({
+			...row,
+			meta: parseJSON<Record<string, unknown>>(row.meta, {})
+		}))
 	);
 });
 
@@ -170,7 +175,9 @@ app.get('/config', async (c) => {
 app.post('/new', async (c) => {
 	const user = verifiedUser(c);
 	const body = (await c.req.json()) as { chat: ChatContent; folder_id?: string | null };
-	const row = await insertChat(c.env, user.id, body.chat ?? {}, { folderId: body.folder_id ?? null });
+	const row = await insertChat(c.env, user.id, body.chat ?? {}, {
+		folderId: body.folder_id ?? null
+	});
 	await emitToUser(c.env, user.id, 'events', [
 		{ chat_id: row.id, data: { type: 'chat:list', data: { chat_id: row.id } } }
 	]);
@@ -185,7 +192,9 @@ app.post('/import', async (c) => {
 		pinned?: boolean;
 		folder_id?: string | null;
 	};
-	const row = await insertChat(c.env, user.id, body.chat ?? {}, { folderId: body.folder_id ?? null });
+	const row = await insertChat(c.env, user.id, body.chat ?? {}, {
+		folderId: body.folder_id ?? null
+	});
 	if (body.pinned || body.meta) {
 		await c.env.DB.prepare('UPDATE chat SET pinned = ?1, meta = ?2 WHERE id = ?3')
 			.bind(body.pinned ? 1 : 0, toJSON(body.meta ?? {}), row.id)
@@ -375,9 +384,14 @@ app.post('/:id/fork', async (c) => {
 	if (body.message_id && content.history?.messages) {
 		content.history = { ...content.history, currentId: body.message_id };
 	}
-	const forked = await insertChat(c.env, user.id, { ...content, title: row.title }, {
-		folderId: row.folder_id
-	});
+	const forked = await insertChat(
+		c.env,
+		user.id,
+		{ ...content, title: row.title },
+		{
+			folderId: row.folder_id
+		}
+	);
 	return c.json(serializeChat(forked));
 });
 
@@ -417,7 +431,9 @@ app.get('/:id/tags', async (c) => {
 	if (!row) throw notFound('Chat not found');
 	const meta = parseJSON<Record<string, unknown>>(row.meta, {});
 	const tags = Array.isArray(meta.tags) ? (meta.tags as string[]) : [];
-	return c.json(tags.map((name) => ({ id: name.replace(/\s+/g, '_').toLowerCase(), name, user_id: user.id })));
+	return c.json(
+		tags.map((name) => ({ id: name.replace(/\s+/g, '_').toLowerCase(), name, user_id: user.id }))
+	);
 });
 
 app.post('/:id/tags', async (c) => {
@@ -433,14 +449,17 @@ app.post('/:id/tags', async (c) => {
 	meta.tags = [...tags];
 	await c.env.DB.batch([
 		c.env.DB.prepare('UPDATE chat SET meta = ?1 WHERE id = ?2').bind(toJSON(meta), row.id),
-		c.env.DB.prepare('INSERT OR IGNORE INTO tag (id, user_id, name, meta) VALUES (?1, ?2, ?3, ?4)').bind(
-			name.replace(/\s+/g, '_').toLowerCase(),
-			user.id,
-			name,
-			toJSON({})
-		)
+		c.env.DB.prepare(
+			'INSERT OR IGNORE INTO tag (id, user_id, name, meta) VALUES (?1, ?2, ?3, ?4)'
+		).bind(name.replace(/\s+/g, '_').toLowerCase(), user.id, name, toJSON({}))
 	]);
-	return c.json([...tags].map((tag) => ({ id: tag.replace(/\s+/g, '_').toLowerCase(), name: tag, user_id: user.id })));
+	return c.json(
+		[...tags].map((tag) => ({
+			id: tag.replace(/\s+/g, '_').toLowerCase(),
+			name: tag,
+			user_id: user.id
+		}))
+	);
 });
 
 app.delete('/:id/tags', async (c) => {
@@ -449,10 +468,16 @@ app.delete('/:id/tags', async (c) => {
 	if (!row) throw notFound('Chat not found');
 	const { name } = (await c.req.json()) as { name: string };
 	const meta = parseJSON<Record<string, unknown>>(row.meta, {});
-	const tags = (Array.isArray(meta.tags) ? (meta.tags as string[]) : []).filter((tag) => tag !== name);
+	const tags = (Array.isArray(meta.tags) ? (meta.tags as string[]) : []).filter(
+		(tag) => tag !== name
+	);
 	meta.tags = tags;
-	await c.env.DB.prepare('UPDATE chat SET meta = ?1 WHERE id = ?2').bind(toJSON(meta), row.id).run();
-	return c.json(tags.map((tag) => ({ id: tag.replace(/\s+/g, '_').toLowerCase(), name: tag, user_id: user.id })));
+	await c.env.DB.prepare('UPDATE chat SET meta = ?1 WHERE id = ?2')
+		.bind(toJSON(meta), row.id)
+		.run();
+	return c.json(
+		tags.map((tag) => ({ id: tag.replace(/\s+/g, '_').toLowerCase(), name: tag, user_id: user.id }))
+	);
 });
 
 app.delete('/:id/tags/all', async (c) => {
@@ -461,7 +486,9 @@ app.delete('/:id/tags/all', async (c) => {
 	if (!row) throw notFound('Chat not found');
 	const meta = parseJSON<Record<string, unknown>>(row.meta, {});
 	meta.tags = [];
-	await c.env.DB.prepare('UPDATE chat SET meta = ?1 WHERE id = ?2').bind(toJSON(meta), row.id).run();
+	await c.env.DB.prepare('UPDATE chat SET meta = ?1 WHERE id = ?2')
+		.bind(toJSON(meta), row.id)
+		.run();
 	return c.json(true);
 });
 

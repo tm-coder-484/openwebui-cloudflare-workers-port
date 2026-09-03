@@ -31,10 +31,14 @@ app.get('/config', async (c) => {
 
 app.post('/config/update', async (c) => {
 	adminUser(c);
-	const body = (await c.req.json()) as { tts?: Record<string, unknown>; stt?: Record<string, unknown> };
+	const body = (await c.req.json()) as {
+		tts?: Record<string, unknown>;
+		stt?: Record<string, unknown>;
+	};
 	const flat = { ...(body.tts ?? {}), ...(body.stt ?? {}) };
 	const updates: Record<string, unknown> = {};
-	for (const [field, key] of Object.entries(AUDIO_KEYS)) if (field in flat) updates[key] = flat[field];
+	for (const [field, key] of Object.entries(AUDIO_KEYS))
+		if (field in flat) updates[key] = flat[field];
 	await setConfigMany(c.env, updates);
 	return c.json(body);
 });
@@ -48,12 +52,21 @@ app.get('/voices', async (c) => {
 
 app.get('/models', async (c) => {
 	verifiedUser(c);
-	return c.json({ models: [{ id: 'tts-1', name: 'tts-1' }, { id: 'tts-1-hd', name: 'tts-1-hd' }] });
+	return c.json({
+		models: [
+			{ id: 'tts-1', name: 'tts-1' },
+			{ id: 'tts-1-hd', name: 'tts-1-hd' }
+		]
+	});
 });
 
 app.post('/speech', async (c) => {
 	verifiedUser(c);
-	const config = await getConfigMany(c.env, ['audio.tts.engine', 'audio.tts.model', 'audio.tts.voice']);
+	const config = await getConfigMany(c.env, [
+		'audio.tts.engine',
+		'audio.tts.model',
+		'audio.tts.voice'
+	]);
 	const connection = (await openaiConnections(c.env))[0];
 	if (!connection) throw bad('Configure an OpenAI-compatible connection to enable text-to-speech.');
 
@@ -94,7 +107,8 @@ app.post('/transcriptions', async (c) => {
 	}
 
 	const connection = (await openaiConnections(c.env))[0];
-	if (!connection) throw bad('Configure Workers AI or an OpenAI-compatible connection for transcription.');
+	if (!connection)
+		throw bad('Configure Workers AI or an OpenAI-compatible connection for transcription.');
 	const upstream = new FormData();
 	upstream.append('file', file);
 	upstream.append('model', (form.get('model') as string) ?? 'whisper-1');

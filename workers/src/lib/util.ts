@@ -56,7 +56,10 @@ export function setPath(obj: any, path: string, value: unknown): void {
 }
 
 /** Recursive merge where `override` wins; used for settings/permission payloads. */
-export function deepMerge<T extends Record<string, any>>(base: T, override: Record<string, any>): T {
+export function deepMerge<T extends Record<string, any>>(
+	base: T,
+	override: Record<string, any>
+): T {
 	const out: Record<string, any> = { ...base };
 	for (const [key, value] of Object.entries(override ?? {})) {
 		if (

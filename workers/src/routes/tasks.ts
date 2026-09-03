@@ -41,7 +41,8 @@ app.post('/config/update', async (c) => {
 	adminUser(c);
 	const body = (await c.req.json()) as Record<string, unknown>;
 	const updates: Record<string, unknown> = {};
-	for (const [field, key] of Object.entries(TASK_KEYS)) if (field in body) updates[key] = body[field];
+	for (const [field, key] of Object.entries(TASK_KEYS))
+		if (field in body) updates[key] = body[field];
 	await setConfigMany(c.env, updates);
 	const config = await getConfigMany(c.env, Object.values(TASK_KEYS));
 	const out: Record<string, unknown> = {};
@@ -63,7 +64,9 @@ async function runTask(c: any, prompt: string, maxTokens = 300) {
 	const body = (await c.req.json()) as { model?: string; messages?: any[] };
 	if (!body.model) throw bad('Model is required');
 	const model = await taskModelId(c.env, body.model);
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], { maxTokens });
+	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens
+	});
 	return c.json(completionEnvelope(model, content));
 }
 
@@ -72,8 +75,13 @@ app.post('/title/completions', async (c) => {
 	verifiedUser(c);
 	if (!body.model) throw bad('Model is required');
 	const model = await taskModelId(c.env, body.model);
-	const prompt = TITLE_GENERATION_PROMPT.replace('{{MESSAGES}}', renderMessages(body.messages ?? [], 2));
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], { maxTokens: 100 });
+	const prompt = TITLE_GENERATION_PROMPT.replace(
+		'{{MESSAGES}}',
+		renderMessages(body.messages ?? [], 2)
+	);
+	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens: 100
+	});
 	return c.json(completionEnvelope(model, content));
 });
 
@@ -82,8 +90,13 @@ app.post('/tags/completions', async (c) => {
 	verifiedUser(c);
 	if (!body.model) throw bad('Model is required');
 	const model = await taskModelId(c.env, body.model);
-	const prompt = TAGS_GENERATION_PROMPT.replace('{{MESSAGES}}', renderMessages(body.messages ?? [], 6));
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], { maxTokens: 200 });
+	const prompt = TAGS_GENERATION_PROMPT.replace(
+		'{{MESSAGES}}',
+		renderMessages(body.messages ?? [], 6)
+	);
+	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens: 200
+	});
 	return c.json(completionEnvelope(model, content));
 });
 
@@ -92,8 +105,13 @@ app.post('/follow_up/completions', async (c) => {
 	verifiedUser(c);
 	if (!body.model) throw bad('Model is required');
 	const model = await taskModelId(c.env, body.model);
-	const prompt = FOLLOW_UP_GENERATION_PROMPT.replace('{{MESSAGES}}', renderMessages(body.messages ?? [], 6));
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], { maxTokens: 300 });
+	const prompt = FOLLOW_UP_GENERATION_PROMPT.replace(
+		'{{MESSAGES}}',
+		renderMessages(body.messages ?? [], 6)
+	);
+	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens: 300
+	});
 	return c.json(completionEnvelope(model, content));
 });
 
@@ -106,7 +124,9 @@ app.post('/queries/completions', async (c) => {
 		'Given the conversation below, produce up to 3 concise web-search queries that would help answer ' +
 		'the final user message. Respond with JSON only: { "queries": ["query 1", "query 2"] }\n\n' +
 		renderMessages(body.messages ?? [], 6);
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], { maxTokens: 200 });
+	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens: 200
+	});
 	return c.json(completionEnvelope(model, content));
 });
 
@@ -122,7 +142,9 @@ app.post('/auto/completions', async (c) => {
 	const prompt =
 		'Continue the following text naturally with at most one sentence. Respond with JSON only: ' +
 		`{ "text": "..." }\n\n${body.prompt ?? ''}`;
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], { maxTokens: 100 });
+	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens: 100
+	});
 	return c.json(completionEnvelope(model, content));
 });
 

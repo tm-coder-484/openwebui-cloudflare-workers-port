@@ -47,7 +47,11 @@ async function visibleSkills(c: any) {
 	for (const row of rows) {
 		if (await hasAccess(c.env, user, 'skill', row.id, row.user_id)) visible.push(row);
 	}
-	const grants = await listGrants(c.env, 'skill', visible.map((row) => row.id));
+	const grants = await listGrants(
+		c.env,
+		'skill',
+		visible.map((row) => row.id)
+	);
 	return visible.map((row) => serialize(row, grants.get(row.id) ?? []));
 }
 
@@ -66,16 +70,29 @@ app.post('/create', async (c) => {
 		`INSERT INTO skill (id, user_id, name, description, content, meta, is_active, created_at, updated_at)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7)`
 	)
-		.bind(id, user.id, body.name, body.description ?? '', body.content ?? '', toJSON(body.meta ?? {}), timestamp)
+		.bind(
+			id,
+			user.id,
+			body.name,
+			body.description ?? '',
+			body.content ?? '',
+			toJSON(body.meta ?? {}),
+			timestamp
+		)
 		.run();
-	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'skill', id, body.access_grants);
-	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1').bind(id).first<SkillRow>();
+	if (Array.isArray(body.access_grants))
+		await replaceGrants(c.env, 'skill', id, body.access_grants);
+	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1')
+		.bind(id)
+		.first<SkillRow>();
 	return c.json(serialize(row!));
 });
 
 app.get('/id/:id', async (c) => {
 	const user = verifiedUser(c);
-	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1').bind(c.req.param('id')).first<SkillRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<SkillRow>();
 	if (!row) throw notFound('Skill not found');
 	if (!(await hasAccess(c.env, user, 'skill', row.id, row.user_id))) throw forbidden();
 	const grants = (await listGrants(c.env, 'skill', [row.id])).get(row.id) ?? [];
@@ -85,7 +102,9 @@ app.get('/id/:id', async (c) => {
 app.post('/id/:id/update', async (c) => {
 	const user = verifiedUser(c);
 	const body = (await c.req.json()) as any;
-	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1').bind(c.req.param('id')).first<SkillRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<SkillRow>();
 	if (!row) throw notFound('Skill not found');
 	if (!(await hasAccess(c.env, user, 'skill', row.id, row.user_id, 'write'))) throw forbidden();
 	await c.env.DB.prepare(
@@ -100,27 +119,36 @@ app.post('/id/:id/update', async (c) => {
 			row.id
 		)
 		.run();
-	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'skill', row.id, body.access_grants);
-	const updated = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1').bind(row.id).first<SkillRow>();
+	if (Array.isArray(body.access_grants))
+		await replaceGrants(c.env, 'skill', row.id, body.access_grants);
+	const updated = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1')
+		.bind(row.id)
+		.first<SkillRow>();
 	return c.json(serialize(updated!));
 });
 
 app.post('/id/:id/toggle', async (c) => {
 	const user = verifiedUser(c);
-	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1').bind(c.req.param('id')).first<SkillRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<SkillRow>();
 	if (!row) throw notFound('Skill not found');
 	if (!(await hasAccess(c.env, user, 'skill', row.id, row.user_id, 'write'))) throw forbidden();
 	await c.env.DB.prepare('UPDATE skill SET is_active = ?1, updated_at = ?2 WHERE id = ?3')
 		.bind(row.is_active ? 0 : 1, now(), row.id)
 		.run();
-	const updated = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1').bind(row.id).first<SkillRow>();
+	const updated = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1')
+		.bind(row.id)
+		.first<SkillRow>();
 	return c.json(serialize(updated!));
 });
 
 app.post('/id/:id/access/update', async (c) => {
 	const user = verifiedUser(c);
 	const body = (await c.req.json()) as { access_grants?: any[] };
-	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1').bind(c.req.param('id')).first<SkillRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<SkillRow>();
 	if (!row) throw notFound('Skill not found');
 	if (!(await hasAccess(c.env, user, 'skill', row.id, row.user_id, 'write'))) throw forbidden();
 	const grants = await replaceGrants(c.env, 'skill', row.id, body.access_grants ?? []);
@@ -129,7 +157,9 @@ app.post('/id/:id/access/update', async (c) => {
 
 app.delete('/id/:id/delete', async (c) => {
 	const user = verifiedUser(c);
-	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1').bind(c.req.param('id')).first<SkillRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM skill WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<SkillRow>();
 	if (!row) throw notFound('Skill not found');
 	if (!(await hasAccess(c.env, user, 'skill', row.id, row.user_id, 'write'))) throw forbidden();
 	await deleteGrants(c.env, 'skill', row.id);

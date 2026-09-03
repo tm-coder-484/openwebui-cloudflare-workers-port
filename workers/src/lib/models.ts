@@ -276,7 +276,9 @@ export async function resolveModel(env: Env, modelId: string): Promise<ResolvedM
 	let systemPrompt: string | undefined;
 	let target = entry;
 
-	const info = entry.info as { params?: Record<string, any>; meta?: Record<string, any> } | undefined;
+	const info = entry.info as
+		| { params?: Record<string, any>; meta?: Record<string, any> }
+		| undefined;
 	if (info?.params) {
 		params = { ...info.params };
 		if (typeof params.system === 'string' && params.system.trim()) systemPrompt = params.system;
@@ -298,7 +300,15 @@ export async function resolveModel(env: Env, modelId: string): Promise<ResolvedM
 	const connections = await openaiConnections(env);
 	const connection =
 		connections.find((item) => item.idx === target.urlIdx) ?? connections[0] ?? undefined;
-	return { id: modelId, upstreamId, entry: target, params, systemPrompt, connection, workersAI: false };
+	return {
+		id: modelId,
+		upstreamId,
+		entry: target,
+		params,
+		systemPrompt,
+		connection,
+		workersAI: false
+	};
 }
 
 export async function modelGrants(env: Env, modelId: string) {

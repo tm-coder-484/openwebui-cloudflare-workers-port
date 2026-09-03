@@ -17,7 +17,17 @@ import {
 } from '../lib/users';
 import { hubStats } from '../lib/hub';
 import { DEFAULT_USER_IMAGE, profileImageResponse } from '../lib/images';
-import { bad, clampInt, deepMerge, forbidden, notFound, now, parseJSON, toJSON, uuid } from '../lib/util';
+import {
+	bad,
+	clampInt,
+	deepMerge,
+	forbidden,
+	notFound,
+	now,
+	parseJSON,
+	toJSON,
+	uuid
+} from '../lib/util';
 
 const app = new Hono<AppContext>({ strict: false });
 const PAGE_SIZE = 30;
@@ -78,7 +88,9 @@ app.get('/', async (c) => {
 
 app.get('/all', async (c) => {
 	adminUser(c);
-	const { results } = await c.env.DB.prepare('SELECT * FROM "user" ORDER BY created_at DESC').all<UserRow>();
+	const { results } = await c.env.DB.prepare(
+		'SELECT * FROM "user" ORDER BY created_at DESC'
+	).all<UserRow>();
 	return c.json({ users: (results ?? []).map(serializeUser), total: results?.length ?? 0 });
 });
 

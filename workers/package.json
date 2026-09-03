@@ -9,6 +9,8 @@
 		"deploy": "wrangler deploy",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
+		"smoke": "node scripts/smoke.mjs",
+		"mock": "node scripts/mock-openai.mjs",
 		"db:local": "wrangler d1 migrations apply open-webui --local",
 		"db:remote": "wrangler d1 migrations apply open-webui --remote"
 	},

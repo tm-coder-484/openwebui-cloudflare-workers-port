@@ -58,9 +58,20 @@ app.post('/', async (c) => {
 		`INSERT INTO folder (id, parent_id, user_id, name, items, meta, data, is_expanded, created_at, updated_at)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?8)`
 	)
-		.bind(id, body.parent_id ?? null, user.id, body.name, toJSON({}), toJSON({}), toJSON({}), timestamp)
+		.bind(
+			id,
+			body.parent_id ?? null,
+			user.id,
+			body.name,
+			toJSON({}),
+			toJSON({}),
+			toJSON({}),
+			timestamp
+		)
 		.run();
-	const row = await c.env.DB.prepare('SELECT * FROM folder WHERE id = ?1').bind(id).first<FolderRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM folder WHERE id = ?1')
+		.bind(id)
+		.first<FolderRow>();
 	return c.json(serialize(row!));
 });
 
@@ -93,7 +104,9 @@ app.post('/:id/update/parent', async (c) => {
 	const user = verifiedUser(c);
 	const { parent_id } = (await c.req.json()) as { parent_id: string | null };
 	if (parent_id === c.req.param('id')) throw bad('A folder cannot be its own parent.');
-	await c.env.DB.prepare('UPDATE folder SET parent_id = ?1, updated_at = ?2 WHERE id = ?3 AND user_id = ?4')
+	await c.env.DB.prepare(
+		'UPDATE folder SET parent_id = ?1, updated_at = ?2 WHERE id = ?3 AND user_id = ?4'
+	)
 		.bind(parent_id ?? null, now(), c.req.param('id'), user.id)
 		.run();
 	return c.json(true);
@@ -122,8 +135,13 @@ app.delete('/:id', async (c) => {
 	const user = verifiedUser(c);
 	const id = c.req.param('id');
 	await c.env.DB.batch([
-		c.env.DB.prepare('UPDATE chat SET folder_id = NULL WHERE folder_id = ?1 AND user_id = ?2').bind(id, user.id),
-		c.env.DB.prepare('UPDATE folder SET parent_id = NULL WHERE parent_id = ?1 AND user_id = ?2').bind(id, user.id),
+		c.env.DB.prepare('UPDATE chat SET folder_id = NULL WHERE folder_id = ?1 AND user_id = ?2').bind(
+			id,
+			user.id
+		),
+		c.env.DB.prepare(
+			'UPDATE folder SET parent_id = NULL WHERE parent_id = ?1 AND user_id = ?2'
+		).bind(id, user.id),
 		c.env.DB.prepare('DELETE FROM folder WHERE id = ?1 AND user_id = ?2').bind(id, user.id)
 	]);
 	return c.json(true);

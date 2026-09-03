@@ -214,8 +214,8 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 
 	'models.default': [],
 	'models.config': {},
-	'tool_servers': [],
-	'terminal_servers': [],
+	tool_servers: [],
+	terminal_servers: [],
 	'subagents.enable': false,
 
 	'evaluation.arena.enable': false,
@@ -281,10 +281,7 @@ export async function getConfig<T = unknown>(env: Env, key: string): Promise<T> 
 	return DEFAULT_CONFIG[key] as T;
 }
 
-export async function getConfigMany(
-	env: Env,
-	keys: string[]
-): Promise<Record<string, unknown>> {
+export async function getConfigMany(env: Env, keys: string[]): Promise<Record<string, unknown>> {
 	const stored = await load(env);
 	const seeded = envDefaults(env);
 	const out: Record<string, unknown> = {};

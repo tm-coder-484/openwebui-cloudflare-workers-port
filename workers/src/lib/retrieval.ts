@@ -25,8 +25,33 @@ export interface ScoredChunk extends Chunk {
 }
 
 const STOP_WORDS = new Set([
-	'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'of', 'to', 'in', 'on', 'for', 'with',
-	'is', 'are', 'was', 'were', 'be', 'been', 'it', 'this', 'that', 'as', 'at', 'by', 'from'
+	'the',
+	'a',
+	'an',
+	'and',
+	'or',
+	'but',
+	'if',
+	'then',
+	'of',
+	'to',
+	'in',
+	'on',
+	'for',
+	'with',
+	'is',
+	'are',
+	'was',
+	'were',
+	'be',
+	'been',
+	'it',
+	'this',
+	'that',
+	'as',
+	'at',
+	'by',
+	'from'
 ]);
 
 export function tokenize(text: string): string[] {
@@ -64,14 +89,18 @@ export function chunkText(text: string, chunkSize = 1000, overlap = 100): string
 }
 
 /** Lightweight lexical ranking used when no vector index is configured. */
-export function scoreChunks<T extends Chunk>(query: string, chunks: T[]): (T & { score: number })[] {
+export function scoreChunks<T extends Chunk>(
+	query: string,
+	chunks: T[]
+): (T & { score: number })[] {
 	const queryTokens = tokenize(query);
 	if (!queryTokens.length) return [];
 
 	const documentFrequency = new Map<string, number>();
 	const tokenized = chunks.map((chunk) => {
 		const tokens = new Set(tokenize(chunk.content));
-		for (const token of tokens) documentFrequency.set(token, (documentFrequency.get(token) ?? 0) + 1);
+		for (const token of tokens)
+			documentFrequency.set(token, (documentFrequency.get(token) ?? 0) + 1);
 		return tokens;
 	});
 
@@ -122,13 +151,24 @@ export async function indexChunks(
 				env.DB.prepare(
 					`INSERT INTO file_chunk (id, file_id, knowledge_id, user_id, idx, content, created_at)
 					 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
-				).bind(row.id, options.fileId, options.knowledgeId ?? null, options.userId, row.idx, row.content, timestamp)
+				).bind(
+					row.id,
+					options.fileId,
+					options.knowledgeId ?? null,
+					options.userId,
+					row.idx,
+					row.content,
+					timestamp
+				)
 			)
 		);
 	}
 
 	if (env.VECTORIZE) {
-		const vectors = await embed(env, rows.map((row) => row.content));
+		const vectors = await embed(
+			env,
+			rows.map((row) => row.content)
+		);
 		if (vectors) {
 			await env.VECTORIZE.upsert(
 				rows.map((row, index) => ({

@@ -52,7 +52,11 @@ async function visibleTools(c: any) {
 	for (const row of rows) {
 		if (await hasAccess(c.env, user, 'tool', row.id, row.user_id)) visible.push(row);
 	}
-	const grants = await listGrants(c.env, 'tool', visible.map((row) => row.id));
+	const grants = await listGrants(
+		c.env,
+		'tool',
+		visible.map((row) => row.id)
+	);
 	return visible.map((row) => serialize(row, grants.get(row.id) ?? []));
 }
 
@@ -88,14 +92,19 @@ app.post('/create', async (c) => {
 			timestamp
 		)
 		.run();
-	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'tool', body.id, body.access_grants);
-	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1').bind(body.id).first<ToolRow>();
+	if (Array.isArray(body.access_grants))
+		await replaceGrants(c.env, 'tool', body.id, body.access_grants);
+	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1')
+		.bind(body.id)
+		.first<ToolRow>();
 	return c.json(serialize(row!));
 });
 
 app.get('/id/:id', async (c) => {
 	const user = verifiedUser(c);
-	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1').bind(c.req.param('id')).first<ToolRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<ToolRow>();
 	if (!row) throw notFound('Tool not found');
 	if (!(await hasAccess(c.env, user, 'tool', row.id, row.user_id))) throw forbidden();
 	const grants = (await listGrants(c.env, 'tool', [row.id])).get(row.id) ?? [];
@@ -105,7 +114,9 @@ app.get('/id/:id', async (c) => {
 app.post('/id/:id/update', async (c) => {
 	const user = verifiedUser(c);
 	const body = (await c.req.json()) as any;
-	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1').bind(c.req.param('id')).first<ToolRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<ToolRow>();
 	if (!row) throw notFound('Tool not found');
 	if (!(await hasAccess(c.env, user, 'tool', row.id, row.user_id, 'write'))) throw forbidden();
 	await c.env.DB.prepare(
@@ -120,15 +131,20 @@ app.post('/id/:id/update', async (c) => {
 			row.id
 		)
 		.run();
-	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'tool', row.id, body.access_grants);
-	const updated = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1').bind(row.id).first<ToolRow>();
+	if (Array.isArray(body.access_grants))
+		await replaceGrants(c.env, 'tool', row.id, body.access_grants);
+	const updated = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1')
+		.bind(row.id)
+		.first<ToolRow>();
 	return c.json(serialize(updated!));
 });
 
 app.post('/id/:id/access/update', async (c) => {
 	const user = verifiedUser(c);
 	const body = (await c.req.json()) as { access_grants?: any[] };
-	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1').bind(c.req.param('id')).first<ToolRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<ToolRow>();
 	if (!row) throw notFound('Tool not found');
 	if (!(await hasAccess(c.env, user, 'tool', row.id, row.user_id, 'write'))) throw forbidden();
 	const grants = await replaceGrants(c.env, 'tool', row.id, body.access_grants ?? []);
@@ -137,7 +153,9 @@ app.post('/id/:id/access/update', async (c) => {
 
 app.delete('/id/:id/delete', async (c) => {
 	const user = verifiedUser(c);
-	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1').bind(c.req.param('id')).first<ToolRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<ToolRow>();
 	if (!row) throw notFound('Tool not found');
 	if (!(await hasAccess(c.env, user, 'tool', row.id, row.user_id, 'write'))) throw forbidden();
 	await deleteGrants(c.env, 'tool', row.id);
@@ -160,10 +178,14 @@ app.get('/id/:id/valves/spec', async (c) => {
 app.post('/id/:id/valves/update', async (c) => {
 	const user = verifiedUser(c);
 	const body = await c.req.json();
-	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1').bind(c.req.param('id')).first<ToolRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM tool WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<ToolRow>();
 	if (!row) throw notFound('Tool not found');
 	if (!(await hasAccess(c.env, user, 'tool', row.id, row.user_id, 'write'))) throw forbidden();
-	await c.env.DB.prepare('UPDATE tool SET valves = ?1 WHERE id = ?2').bind(toJSON(body), row.id).run();
+	await c.env.DB.prepare('UPDATE tool SET valves = ?1 WHERE id = ?2')
+		.bind(toJSON(body), row.id)
+		.run();
 	return c.json(body);
 });
 app.get('/id/:id/valves/user', async (c) => {

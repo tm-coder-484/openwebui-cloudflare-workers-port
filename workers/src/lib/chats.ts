@@ -145,9 +145,7 @@ export async function updateChatContent(
 	}
 	bindings.push(id);
 
-	await env.DB.prepare(
-		`UPDATE chat SET ${assignments.join(', ')} WHERE id = ?${bindings.length}`
-	)
+	await env.DB.prepare(`UPDATE chat SET ${assignments.join(', ')} WHERE id = ?${bindings.length}`)
 		.bind(...bindings)
 		.run();
 	return getChat(env, id);
@@ -210,7 +208,12 @@ export async function setChatTitle(env: Env, chatId: string, title: string): Pro
 		.run();
 }
 
-export async function setChatTags(env: Env, chatId: string, userId: string, tags: string[]): Promise<void> {
+export async function setChatTags(
+	env: Env,
+	chatId: string,
+	userId: string,
+	tags: string[]
+): Promise<void> {
 	const row = await getChat(env, chatId);
 	if (!row) return;
 	const meta = parseJSON<Record<string, unknown>>(row.meta, {});

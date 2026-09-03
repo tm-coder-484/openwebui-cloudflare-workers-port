@@ -115,7 +115,11 @@ export async function createToken(
 	const unsigned = `${b64urlEncode(encoder.encode(JSON.stringify(header)))}.${b64urlEncode(
 		encoder.encode(JSON.stringify(body))
 	)}`;
-	const signature = await crypto.subtle.sign('HMAC', await hmacKey(secret), encoder.encode(unsigned));
+	const signature = await crypto.subtle.sign(
+		'HMAC',
+		await hmacKey(secret),
+		encoder.encode(unsigned)
+	);
 	return `${unsigned}.${b64urlEncode(signature)}`;
 }
 

@@ -3,7 +3,13 @@
 import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { verifiedUser } from '../lib/auth';
-import { hasAccess, listGrants, replaceGrants, deleteGrants, visibleResourceIdsClause } from '../lib/access';
+import {
+	hasAccess,
+	listGrants,
+	replaceGrants,
+	deleteGrants,
+	visibleResourceIdsClause
+} from '../lib/access';
 import { hasPermission } from '../lib/permissions';
 import { bad, forbidden, notFound, now, parseJSON, toBool, toJSON } from '../lib/util';
 
@@ -49,7 +55,9 @@ const serialize = (row: PromptRow, grants: any[] = []) => ({
 async function listVisible(c: any) {
 	const user = verifiedUser(c);
 	if (user.role === 'admin') {
-		const { results } = await c.env.DB.prepare('SELECT * FROM prompt ORDER BY updated_at DESC').all();
+		const { results } = await c.env.DB.prepare(
+			'SELECT * FROM prompt ORDER BY updated_at DESC'
+		).all();
 		return { user, rows: (results ?? []) as unknown as PromptRow[] };
 	}
 	const clause = await visibleResourceIdsClause(c.env, user.id, 'prompt');
@@ -62,7 +70,11 @@ async function listVisible(c: any) {
 }
 
 async function respond(c: any, rows: PromptRow[]) {
-	const grants = await listGrants(c.env, 'prompt', rows.map((row) => row.id));
+	const grants = await listGrants(
+		c.env,
+		'prompt',
+		rows.map((row) => row.id)
+	);
 	return c.json(rows.map((row) => serialize(row, grants.get(row.id) ?? [])));
 }
 
@@ -109,15 +121,20 @@ app.post('/create', async (c) => {
 			timestamp
 		)
 		.run();
-	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'prompt', command, body.access_grants);
-	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE id = ?1').bind(command).first<PromptRow>();
+	if (Array.isArray(body.access_grants))
+		await replaceGrants(c.env, 'prompt', command, body.access_grants);
+	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE id = ?1')
+		.bind(command)
+		.first<PromptRow>();
 	return c.json(serialize(row!));
 });
 
 app.get('/id/:command{.+}', async (c) => {
 	const user = verifiedUser(c);
 	const command = c.req.param('command').replace(/^\//, '');
-	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE command = ?1').bind(command).first<PromptRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE command = ?1')
+		.bind(command)
+		.first<PromptRow>();
 	if (!row) throw notFound('Prompt not found');
 	if (!(await hasAccess(c.env, user, 'prompt', row.id, row.user_id))) throw forbidden();
 	const grants = (await listGrants(c.env, 'prompt', [row.id])).get(row.id) ?? [];
@@ -126,9 +143,14 @@ app.get('/id/:command{.+}', async (c) => {
 
 app.post('/id/:command{.+}/update', async (c) => {
 	const user = verifiedUser(c);
-	const command = c.req.param('command').replace(/^\//, '').replace(/\/update$/, '');
+	const command = c.req
+		.param('command')
+		.replace(/^\//, '')
+		.replace(/\/update$/, '');
 	const body = (await c.req.json()) as any;
-	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE command = ?1').bind(command).first<PromptRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE command = ?1')
+		.bind(command)
+		.first<PromptRow>();
 	if (!row) throw notFound('Prompt not found');
 	if (!(await hasAccess(c.env, user, 'prompt', row.id, row.user_id, 'write'))) throw forbidden();
 
@@ -145,17 +167,25 @@ app.post('/id/:command{.+}/update', async (c) => {
 			row.id
 		)
 		.run();
-	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'prompt', row.id, body.access_grants);
-	const updated = await c.env.DB.prepare('SELECT * FROM prompt WHERE id = ?1').bind(row.id).first<PromptRow>();
+	if (Array.isArray(body.access_grants))
+		await replaceGrants(c.env, 'prompt', row.id, body.access_grants);
+	const updated = await c.env.DB.prepare('SELECT * FROM prompt WHERE id = ?1')
+		.bind(row.id)
+		.first<PromptRow>();
 	const grants = (await listGrants(c.env, 'prompt', [row.id])).get(row.id) ?? [];
 	return c.json(serialize(updated!, grants));
 });
 
 app.post('/id/:command{.+}/access/update', async (c) => {
 	const user = verifiedUser(c);
-	const command = c.req.param('command').replace(/^\//, '').replace(/\/access\/update$/, '');
+	const command = c.req
+		.param('command')
+		.replace(/^\//, '')
+		.replace(/\/access\/update$/, '');
 	const body = (await c.req.json()) as { access_grants?: any[] };
-	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE command = ?1').bind(command).first<PromptRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE command = ?1')
+		.bind(command)
+		.first<PromptRow>();
 	if (!row) throw notFound('Prompt not found');
 	if (!(await hasAccess(c.env, user, 'prompt', row.id, row.user_id, 'write'))) throw forbidden();
 	const grants = await replaceGrants(c.env, 'prompt', row.id, body.access_grants ?? []);
@@ -164,8 +194,13 @@ app.post('/id/:command{.+}/access/update', async (c) => {
 
 app.delete('/id/:command{.+}/delete', async (c) => {
 	const user = verifiedUser(c);
-	const command = c.req.param('command').replace(/^\//, '').replace(/\/delete$/, '');
-	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE command = ?1').bind(command).first<PromptRow>();
+	const command = c.req
+		.param('command')
+		.replace(/^\//, '')
+		.replace(/\/delete$/, '');
+	const row = await c.env.DB.prepare('SELECT * FROM prompt WHERE command = ?1')
+		.bind(command)
+		.first<PromptRow>();
 	if (!row) throw notFound('Prompt not found');
 	if (!(await hasAccess(c.env, user, 'prompt', row.id, row.user_id, 'write'))) throw forbidden();
 	await deleteGrants(c.env, 'prompt', row.id);

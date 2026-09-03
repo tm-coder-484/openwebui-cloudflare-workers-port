@@ -41,7 +41,9 @@ const serialize = (row: FunctionRow) => ({
 });
 
 const all = async (c: any) => {
-	const { results } = await c.env.DB.prepare('SELECT * FROM function ORDER BY updated_at DESC').all();
+	const { results } = await c.env.DB.prepare(
+		'SELECT * FROM function ORDER BY updated_at DESC'
+	).all();
 	return ((results ?? []) as unknown as FunctionRow[]).map(serialize);
 };
 
@@ -81,7 +83,9 @@ app.post('/create', async (c) => {
 			timestamp
 		)
 		.run();
-	const row = await c.env.DB.prepare('SELECT * FROM function WHERE id = ?1').bind(body.id).first<FunctionRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM function WHERE id = ?1')
+		.bind(body.id)
+		.first<FunctionRow>();
 	return c.json(serialize(row!));
 });
 

@@ -103,7 +103,9 @@ app.get('/', async (c) => {
 
 app.get('/all', async (c) => {
 	adminUser(c);
-	const { results } = await c.env.DB.prepare('SELECT * FROM file ORDER BY created_at DESC').all<FileRow>();
+	const { results } = await c.env.DB.prepare(
+		'SELECT * FROM file ORDER BY created_at DESC'
+	).all<FileRow>();
 	return c.json((results ?? []).map(serialize));
 });
 
@@ -128,7 +130,9 @@ app.get('/search', async (c) => {
 
 async function loadFile(c: any, id: string): Promise<FileRow> {
 	const user = currentUser(c);
-	const row = (await c.env.DB.prepare('SELECT * FROM file WHERE id = ?1').bind(id).first()) as FileRow | null;
+	const row = (await c.env.DB.prepare('SELECT * FROM file WHERE id = ?1')
+		.bind(id)
+		.first()) as FileRow | null;
 	if (!row) throw notFound('File not found');
 	if (row.user_id !== user.id && !(await hasAccess(c.env, user, 'file', row.id, row.user_id))) {
 		throw forbidden();
@@ -174,7 +178,9 @@ app.post('/:id/data/content/update', async (c) => {
 	c.executionCtx?.waitUntil?.(
 		indexChunks(c.env, { fileId: row.id, userId: row.user_id, text: content }).catch(() => {})
 	);
-	const updated = await c.env.DB.prepare('SELECT * FROM file WHERE id = ?1').bind(row.id).first<FileRow>();
+	const updated = await c.env.DB.prepare('SELECT * FROM file WHERE id = ?1')
+		.bind(row.id)
+		.first<FileRow>();
 	return c.json(serialize(updated!));
 });
 
@@ -187,13 +193,17 @@ app.post('/:id/rename', async (c) => {
 	await c.env.DB.prepare('UPDATE file SET filename = ?1, meta = ?2, updated_at = ?3 WHERE id = ?4')
 		.bind(filename, toJSON(meta), now(), row.id)
 		.run();
-	const updated = await c.env.DB.prepare('SELECT * FROM file WHERE id = ?1').bind(row.id).first<FileRow>();
+	const updated = await c.env.DB.prepare('SELECT * FROM file WHERE id = ?1')
+		.bind(row.id)
+		.first<FileRow>();
 	return c.json(serialize(updated!));
 });
 
 app.get('/:id/process/status', async (c) => {
 	const row = await loadFile(c, c.req.param('id'));
-	const chunks = await c.env.DB.prepare('SELECT COUNT(*) AS count FROM file_chunk WHERE file_id = ?1')
+	const chunks = await c.env.DB.prepare(
+		'SELECT COUNT(*) AS count FROM file_chunk WHERE file_id = ?1'
+	)
 		.bind(row.id)
 		.first<{ count: number }>();
 	return c.json({ status: 'completed', chunks: chunks?.count ?? 0 });

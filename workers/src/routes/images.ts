@@ -29,7 +29,8 @@ app.post('/config/update', async (c) => {
 	adminUser(c);
 	const body = (await c.req.json()) as Record<string, unknown>;
 	const updates: Record<string, unknown> = {};
-	for (const [field, key] of Object.entries(IMAGE_KEYS)) if (field in body) updates[key] = body[field];
+	for (const [field, key] of Object.entries(IMAGE_KEYS))
+		if (field in body) updates[key] = body[field];
 	await setConfigMany(c.env, updates);
 	return c.json(body);
 });
@@ -59,20 +60,27 @@ app.post('/generations', async (c) => {
 	]);
 	if (!config['image_generation.enable']) throw bad('Image generation is disabled.');
 
-	const body = (await c.req.json()) as { prompt?: string; size?: string; n?: number; model?: string };
+	const body = (await c.req.json()) as {
+		prompt?: string;
+		size?: string;
+		n?: number;
+		model?: string;
+	};
 	if (!body.prompt) throw bad('A prompt is required');
 
 	if (config['image_generation.engine'] === 'workers-ai') {
 		if (!c.env.AI) throw bad('The Workers AI binding is not configured.');
-		const model = body.model || (config['image_generation.model'] as string) ||
+		const model =
+			body.model ||
+			(config['image_generation.model'] as string) ||
 			'@cf/black-forest-labs/flux-1-schnell';
 		const result = (await c.env.AI.run(model as any, { prompt: body.prompt } as any)) as any;
 		const base64 =
 			typeof result?.image === 'string'
 				? result.image
-				: await new Response(result).arrayBuffer().then((buffer) =>
-						btoa(String.fromCharCode(...new Uint8Array(buffer)))
-					);
+				: await new Response(result)
+						.arrayBuffer()
+						.then((buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))));
 		return c.json([{ url: `data:image/png;base64,${base64}` }]);
 	}
 

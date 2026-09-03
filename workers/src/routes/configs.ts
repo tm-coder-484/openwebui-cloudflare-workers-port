@@ -110,7 +110,12 @@ app.post('/tool_servers', async (c) => {
 
 app.post('/tool_servers/verify', async (c) => {
 	adminUser(c);
-	const body = (await c.req.json()) as { url?: string; path?: string; auth_type?: string; key?: string };
+	const body = (await c.req.json()) as {
+		url?: string;
+		path?: string;
+		auth_type?: string;
+		key?: string;
+	};
 	if (!body.url) throw bad('A server URL is required');
 	const target = `${body.url.replace(/\/+$/, '')}/${(body.path ?? 'openapi.json').replace(/^\/+/, '')}`;
 	const response = await fetch(target, {

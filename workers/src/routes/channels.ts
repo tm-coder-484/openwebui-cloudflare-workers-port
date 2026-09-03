@@ -3,10 +3,27 @@
 import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { adminUser, verifiedUser } from '../lib/auth';
-import { hasAccess, listGrants, replaceGrants, deleteGrants, visibleResourceIdsClause } from '../lib/access';
+import {
+	hasAccess,
+	listGrants,
+	replaceGrants,
+	deleteGrants,
+	visibleResourceIdsClause
+} from '../lib/access';
 import { emitToChannel } from '../lib/hub';
 import { getUserById, publicUser } from '../lib/users';
-import { bad, clampInt, forbidden, notFound, now, nowNs, parseJSON, toBool, toJSON, uuid } from '../lib/util';
+import {
+	bad,
+	clampInt,
+	forbidden,
+	notFound,
+	now,
+	nowNs,
+	parseJSON,
+	toBool,
+	toJSON,
+	uuid
+} from '../lib/util';
 
 const app = new Hono<AppContext>({ strict: false });
 
@@ -64,7 +81,7 @@ async function serializeMessage(c: any, row: MessageRow) {
 		.bind(row.id)
 		.all();
 	const grouped = new Map<string, string[]>();
-	for (const reaction of ((reactions ?? []) as { name: string; user_id: string }[])) {
+	for (const reaction of (reactions ?? []) as { name: string; user_id: string }[]) {
 		grouped.set(reaction.name, [...(grouped.get(reaction.name) ?? []), reaction.user_id]);
 	}
 	const replies = (await c.env.DB.prepare(
@@ -118,7 +135,11 @@ async function visibleChannels(c: any) {
 
 app.get('/', async (c) => {
 	const rows = await visibleChannels(c);
-	const grants = await listGrants(c.env, 'channel', rows.map((row) => row.id));
+	const grants = await listGrants(
+		c.env,
+		'channel',
+		rows.map((row) => row.id)
+	);
 	return c.json(rows.map((row) => serializeChannel(row, grants.get(row.id) ?? [])));
 });
 
@@ -154,8 +175,11 @@ app.post('/create', async (c) => {
 	)
 		.bind(uuid(), id, user.id, 'owner', timestamp)
 		.run();
-	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'channel', id, body.access_grants);
-	const row = await c.env.DB.prepare('SELECT * FROM channel WHERE id = ?1').bind(id).first<ChannelRow>();
+	if (Array.isArray(body.access_grants))
+		await replaceGrants(c.env, 'channel', id, body.access_grants);
+	const row = await c.env.DB.prepare('SELECT * FROM channel WHERE id = ?1')
+		.bind(id)
+		.first<ChannelRow>();
 	return c.json(serializeChannel(row!));
 });
 
@@ -197,8 +221,11 @@ app.post('/:id/update', async (c) => {
 			row.id
 		)
 		.run();
-	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'channel', row.id, body.access_grants);
-	const updated = await c.env.DB.prepare('SELECT * FROM channel WHERE id = ?1').bind(row.id).first<ChannelRow>();
+	if (Array.isArray(body.access_grants))
+		await replaceGrants(c.env, 'channel', row.id, body.access_grants);
+	const updated = await c.env.DB.prepare('SELECT * FROM channel WHERE id = ?1')
+		.bind(row.id)
+		.first<ChannelRow>();
 	return c.json(serializeChannel(updated!));
 });
 
@@ -206,7 +233,11 @@ app.delete('/:id/delete', async (c) => {
 	const { row, user } = await loadChannel(c, c.req.param('id'), 'write');
 	await deleteGrants(c.env, 'channel', row.id);
 	await c.env.DB.batch([
-		c.env.DB.prepare('UPDATE channel SET deleted_at = ?1, deleted_by = ?2 WHERE id = ?3').bind(now(), user.id, row.id),
+		c.env.DB.prepare('UPDATE channel SET deleted_at = ?1, deleted_by = ?2 WHERE id = ?3').bind(
+			now(),
+			user.id,
+			row.id
+		),
 		c.env.DB.prepare('DELETE FROM channel_member WHERE channel_id = ?1').bind(row.id)
 	]);
 	return c.json(true);
@@ -267,7 +298,9 @@ app.post('/:id/messages/post', async (c) => {
 		.run()
 		.catch(() => {});
 
-	const message = await c.env.DB.prepare('SELECT * FROM message WHERE id = ?1').bind(id).first<MessageRow>();
+	const message = await c.env.DB.prepare('SELECT * FROM message WHERE id = ?1')
+		.bind(id)
+		.first<MessageRow>();
 	const payload = await serializeMessage(c, message!);
 	await emitToChannel(c.env, row.id, 'events:channel', [
 		{
@@ -290,10 +323,19 @@ app.post('/:id/messages/:messageId/update', async (c) => {
 	if (!message) throw notFound('Message not found');
 	if (message.user_id !== user.id && user.role !== 'admin') throw forbidden();
 
-	await c.env.DB.prepare('UPDATE message SET content = ?1, data = ?2, updated_at = ?3 WHERE id = ?4')
-		.bind(body.content ?? message.content, toJSON(body.data ?? parseJSON(message.data, {})), nowNs(), messageId)
+	await c.env.DB.prepare(
+		'UPDATE message SET content = ?1, data = ?2, updated_at = ?3 WHERE id = ?4'
+	)
+		.bind(
+			body.content ?? message.content,
+			toJSON(body.data ?? parseJSON(message.data, {})),
+			nowNs(),
+			messageId
+		)
 		.run();
-	const updated = await c.env.DB.prepare('SELECT * FROM message WHERE id = ?1').bind(messageId).first<MessageRow>();
+	const updated = await c.env.DB.prepare('SELECT * FROM message WHERE id = ?1')
+		.bind(messageId)
+		.first<MessageRow>();
 	const payload = await serializeMessage(c, updated!);
 	await emitToChannel(c.env, row.id, 'events:channel', [
 		{ channel_id: row.id, message_id: messageId, data: { type: 'message:update', data: payload } }
@@ -314,7 +356,11 @@ app.delete('/:id/messages/:messageId/delete', async (c) => {
 		c.env.DB.prepare('DELETE FROM message WHERE id = ?1').bind(messageId)
 	]);
 	await emitToChannel(c.env, row.id, 'events:channel', [
-		{ channel_id: row.id, message_id: messageId, data: { type: 'message:delete', data: { id: messageId } } }
+		{
+			channel_id: row.id,
+			message_id: messageId,
+			data: { type: 'message:delete', data: { id: messageId } }
+		}
 	]);
 	return c.json(true);
 });
@@ -368,7 +414,10 @@ app.get('/:id/members', async (c) => {
 	)
 		.bind(row.id)
 		.all();
-	return c.json({ members: ((results ?? []) as any[]).map(publicUser), total: results?.length ?? 0 });
+	return c.json({
+		members: ((results ?? []) as any[]).map(publicUser),
+		total: results?.length ?? 0
+	});
 });
 
 app.get('/:id/members/active', async (c) => {
@@ -395,7 +444,10 @@ app.post('/:id/update/members/remove', async (c) => {
 	const { user_ids } = (await c.req.json()) as { user_ids: string[] };
 	await c.env.DB.batch(
 		(user_ids ?? []).map((userId) =>
-			c.env.DB.prepare('DELETE FROM channel_member WHERE channel_id = ?1 AND user_id = ?2').bind(row.id, userId)
+			c.env.DB.prepare('DELETE FROM channel_member WHERE channel_id = ?1 AND user_id = ?2').bind(
+				row.id,
+				userId
+			)
 		)
 	);
 	return c.json(true);

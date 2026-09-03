@@ -23,9 +23,7 @@ describe('password hashing', () => {
 	});
 
 	it('explains bcrypt hashes instead of silently failing', async () => {
-		await expect(
-			verifyPassword('x', '$2b$12$abcdefghijklmnopqrstuv')
-		).rejects.toThrow(/bcrypt/);
+		await expect(verifyPassword('x', '$2b$12$abcdefghijklmnopqrstuv')).rejects.toThrow(/bcrypt/);
 	});
 
 	it('rejects empty stored hashes', async () => {

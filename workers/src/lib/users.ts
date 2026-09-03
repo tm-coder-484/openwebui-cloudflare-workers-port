@@ -88,7 +88,9 @@ export async function getUserByApiKey(env: Env, key: string): Promise<UserRow | 
 }
 
 export async function countUsers(env: Env): Promise<number> {
-	const row = await env.DB.prepare('SELECT COUNT(*) AS count FROM "user"').first<{ count: number }>();
+	const row = await env.DB.prepare('SELECT COUNT(*) AS count FROM "user"').first<{
+		count: number;
+	}>();
 	return row?.count ?? 0;
 }
 

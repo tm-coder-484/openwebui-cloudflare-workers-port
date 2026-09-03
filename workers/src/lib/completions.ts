@@ -119,7 +119,10 @@ export function buildUpstreamRequest(
 		const first = messages[0];
 		messages =
 			first?.role === 'system'
-				? [{ role: 'system', content: `${rendered}\n\n${String(first.content ?? '')}` }, ...messages.slice(1)]
+				? [
+						{ role: 'system', content: `${rendered}\n\n${String(first.content ?? '')}` },
+						...messages.slice(1)
+					]
 				: [{ role: 'system', content: rendered }, ...messages];
 	}
 
@@ -452,14 +455,17 @@ async function* streamUpstream(
 
 	if (request.kind === 'workers-ai') {
 		if (!env.AI) throw new HttpError(400, 'Workers AI binding is not configured.');
-		const result = (await env.AI.run(request.model as any, {
-			messages: request.payload.messages,
-			stream: true,
-			...(request.payload.max_tokens ? { max_tokens: request.payload.max_tokens } : {}),
-			...(request.payload.temperature !== undefined
-				? { temperature: request.payload.temperature }
-				: {})
-		} as any)) as unknown as ReadableStream<Uint8Array>;
+		const result = (await env.AI.run(
+			request.model as any,
+			{
+				messages: request.payload.messages,
+				stream: true,
+				...(request.payload.max_tokens ? { max_tokens: request.payload.max_tokens } : {}),
+				...(request.payload.temperature !== undefined
+					? { temperature: request.payload.temperature }
+					: {})
+			} as any
+		)) as unknown as ReadableStream<Uint8Array>;
 		body = result;
 	} else {
 		const response = await fetch(request.url!, {
@@ -492,10 +498,13 @@ async function callUpstream(
 ): Promise<{ content: string; usage?: Record<string, unknown> }> {
 	if (request.kind === 'workers-ai') {
 		if (!env.AI) throw new HttpError(400, 'Workers AI binding is not configured.');
-		const result = (await env.AI.run(request.model as any, {
-			messages: request.payload.messages,
-			...(request.payload.max_tokens ? { max_tokens: request.payload.max_tokens } : {})
-		} as any)) as any;
+		const result = (await env.AI.run(
+			request.model as any,
+			{
+				messages: request.payload.messages,
+				...(request.payload.max_tokens ? { max_tokens: request.payload.max_tokens } : {})
+			} as any
+		)) as any;
 		return {
 			content: result?.response ?? result?.choices?.[0]?.message?.content ?? '',
 			usage: result?.usage
@@ -612,7 +621,10 @@ async function runBackgroundTasks(
 
 	if (tasks.follow_up_generation && config['task.follow_up.enable'] !== false) {
 		try {
-			const prompt = FOLLOW_UP_GENERATION_PROMPT.replace('{{MESSAGES}}', renderMessages(history, 6));
+			const prompt = FOLLOW_UP_GENERATION_PROMPT.replace(
+				'{{MESSAGES}}',
+				renderMessages(history, 6)
+			);
 			const raw = await generateText(env, model, [{ role: 'user', content: prompt }], {
 				maxTokens: 300
 			});

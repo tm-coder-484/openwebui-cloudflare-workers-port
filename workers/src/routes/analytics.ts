@@ -44,7 +44,12 @@ app.get('/summary', async (c) => {
 		 FROM chat_message ${where}`
 	)
 		.bind(...bindings)
-		.first<{ total_messages: number; total_chats: number; total_models: number; total_users: number }>();
+		.first<{
+			total_messages: number;
+			total_chats: number;
+			total_models: number;
+			total_users: number;
+		}>();
 	return c.json({
 		total_messages: row?.total_messages ?? 0,
 		total_chats: row?.total_chats ?? 0,
@@ -109,9 +114,7 @@ app.get('/daily', async (c) => {
 app.get('/tokens', async (c) => {
 	adminUser(c);
 	const { where, bindings } = range(c, ['model_id IS NOT NULL']);
-	const { results } = await c.env.DB.prepare(
-		`SELECT model_id, usage FROM chat_message ${where}`
-	)
+	const { results } = await c.env.DB.prepare(`SELECT model_id, usage FROM chat_message ${where}`)
 		.bind(...bindings)
 		.all<{ model_id: string; usage: string | null }>();
 

@@ -3,7 +3,13 @@
 import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { adminUser, verifiedUser } from '../lib/auth';
-import { hasAccess, listGrants, replaceGrants, deleteGrants, visibleResourceIdsClause } from '../lib/access';
+import {
+	hasAccess,
+	listGrants,
+	replaceGrants,
+	deleteGrants,
+	visibleResourceIdsClause
+} from '../lib/access';
 import { hasPermission } from '../lib/permissions';
 import { getModelRow, listModelRows, serializeModelRow, type ModelRow } from '../lib/models';
 import { DEFAULT_MODEL_IMAGE, profileImageResponse } from '../lib/images';
@@ -13,7 +19,11 @@ import { bad, forbidden, notFound, now, toJSON } from '../lib/util';
 const app = new Hono<AppContext>({ strict: false });
 
 async function withGrants(c: any, rows: ModelRow[]) {
-	const grants = await listGrants(c.env, 'model', rows.map((row) => row.id));
+	const grants = await listGrants(
+		c.env,
+		'model',
+		rows.map((row) => row.id)
+	);
 	return rows.map((row) => serializeModelRow(row, grants.get(row.id) ?? []));
 }
 
@@ -82,7 +92,12 @@ app.post('/create', async (c) => {
 		await replaceGrants(c.env, 'model', body.id, body.access_grants);
 	}
 	const row = await getModelRow(c.env, body.id);
-	return c.json(serializeModelRow(row!, await listGrants(c.env, 'model', [body.id]).then((m) => m.get(body.id) ?? [])));
+	return c.json(
+		serializeModelRow(
+			row!,
+			await listGrants(c.env, 'model', [body.id]).then((m) => m.get(body.id) ?? [])
+		)
+	);
 });
 
 app.get('/model/profile/image', async (c) => {

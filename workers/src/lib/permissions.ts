@@ -27,10 +27,7 @@ function combine(base: Record<string, any>, extra: Record<string, any>): Record<
 	return out;
 }
 
-export async function resolvePermissions(
-	env: Env,
-	userId: string
-): Promise<Record<string, any>> {
+export async function resolvePermissions(env: Env, userId: string): Promise<Record<string, any>> {
 	let permissions = structuredClone(await getUserPermissions(env));
 	for (const groupPermissions of await groupPermissionsFor(env, userId)) {
 		permissions = combine(permissions, groupPermissions);

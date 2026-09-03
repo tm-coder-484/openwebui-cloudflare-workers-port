@@ -329,7 +329,13 @@ export class SocketHub implements DurableObject {
 				this.emitToRoom(
 					`doc:${documentId}`,
 					'ydoc:document:update',
-					[{ document_id: data.document_id, socket_id: data.socket_id ?? session.sid, update: data.update }],
+					[
+						{
+							document_id: data.document_id,
+							socket_id: data.socket_id ?? session.sid,
+							update: data.update
+						}
+					],
 					session.sid
 				);
 				return undefined;

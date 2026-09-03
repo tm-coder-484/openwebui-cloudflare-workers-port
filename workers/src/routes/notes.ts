@@ -3,7 +3,13 @@
 import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { verifiedUser } from '../lib/auth';
-import { hasAccess, listGrants, replaceGrants, deleteGrants, visibleResourceIdsClause } from '../lib/access';
+import {
+	hasAccess,
+	listGrants,
+	replaceGrants,
+	deleteGrants,
+	visibleResourceIdsClause
+} from '../lib/access';
 import { hasPermission } from '../lib/permissions';
 import { bad, clampInt, forbidden, notFound, now, parseJSON, toJSON, uuid } from '../lib/util';
 
@@ -45,7 +51,11 @@ async function visibleNotes(c: any, limit?: number, offset = 0) {
 		.bind(user.id, ...clause.bindings)
 		.all();
 	const rows = (results ?? []) as unknown as NoteRow[];
-	const grants = await listGrants(c.env, 'note', rows.map((row) => row.id));
+	const grants = await listGrants(
+		c.env,
+		'note',
+		rows.map((row) => row.id)
+	);
 	return rows.map((row) => serialize(row, grants.get(row.id) ?? []));
 }
 
@@ -73,7 +83,9 @@ app.get('/search', async (c) => {
 		notes.filter(
 			(note) =>
 				note.title.toLowerCase().includes(query) ||
-				JSON.stringify(note.data ?? {}).toLowerCase().includes(query)
+				JSON.stringify(note.data ?? {})
+					.toLowerCase()
+					.includes(query)
 		)
 	);
 });
@@ -87,7 +99,14 @@ app.post('/create', async (c) => {
 	await c.env.DB.prepare(
 		'INSERT INTO note (id, user_id, title, data, meta, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)'
 	)
-		.bind(id, user.id, body.title ?? 'Untitled', toJSON(body.data ?? {}), toJSON(body.meta ?? {}), timestamp)
+		.bind(
+			id,
+			user.id,
+			body.title ?? 'Untitled',
+			toJSON(body.data ?? {}),
+			toJSON(body.meta ?? {}),
+			timestamp
+		)
 		.run();
 	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'note', id, body.access_grants);
 	const row = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1').bind(id).first<NoteRow>();
@@ -96,7 +115,9 @@ app.post('/create', async (c) => {
 
 app.get('/:id', async (c) => {
 	const user = verifiedUser(c);
-	const row = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1').bind(c.req.param('id')).first<NoteRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<NoteRow>();
 	if (!row) throw notFound('Note not found');
 	if (!(await hasAccess(c.env, user, 'note', row.id, row.user_id))) throw forbidden();
 	const grants = (await listGrants(c.env, 'note', [row.id])).get(row.id) ?? [];
@@ -106,10 +127,14 @@ app.get('/:id', async (c) => {
 app.post('/:id/update', async (c) => {
 	const user = verifiedUser(c);
 	const body = (await c.req.json()) as any;
-	const row = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1').bind(c.req.param('id')).first<NoteRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<NoteRow>();
 	if (!row) throw notFound('Note not found');
 	if (!(await hasAccess(c.env, user, 'note', row.id, row.user_id, 'write'))) throw forbidden();
-	await c.env.DB.prepare('UPDATE note SET title = ?1, data = ?2, meta = ?3, updated_at = ?4 WHERE id = ?5')
+	await c.env.DB.prepare(
+		'UPDATE note SET title = ?1, data = ?2, meta = ?3, updated_at = ?4 WHERE id = ?5'
+	)
 		.bind(
 			body.title ?? row.title,
 			toJSON(body.data ?? parseJSON(row.data, {})),
@@ -118,14 +143,18 @@ app.post('/:id/update', async (c) => {
 			row.id
 		)
 		.run();
-	const updated = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1').bind(row.id).first<NoteRow>();
+	const updated = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1')
+		.bind(row.id)
+		.first<NoteRow>();
 	return c.json(serialize(updated!));
 });
 
 app.post('/:id/access/update', async (c) => {
 	const user = verifiedUser(c);
 	const body = (await c.req.json()) as { access_grants?: any[] };
-	const row = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1').bind(c.req.param('id')).first<NoteRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<NoteRow>();
 	if (!row) throw notFound('Note not found');
 	if (!(await hasAccess(c.env, user, 'note', row.id, row.user_id, 'write'))) throw forbidden();
 	const grants = await replaceGrants(c.env, 'note', row.id, body.access_grants ?? []);
@@ -135,7 +164,9 @@ app.post('/:id/access/update', async (c) => {
 app.post('/:id/pin', async (c) => {
 	const user = verifiedUser(c);
 	const id = c.req.param('id');
-	const existing = await c.env.DB.prepare('SELECT id FROM pinned_note WHERE note_id = ?1 AND user_id = ?2')
+	const existing = await c.env.DB.prepare(
+		'SELECT id FROM pinned_note WHERE note_id = ?1 AND user_id = ?2'
+	)
 		.bind(id, user.id)
 		.first<{ id: string }>();
 	if (existing) {
@@ -152,7 +183,9 @@ app.post('/:id/pin', async (c) => {
 
 app.delete('/:id/delete', async (c) => {
 	const user = verifiedUser(c);
-	const row = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1').bind(c.req.param('id')).first<NoteRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM note WHERE id = ?1')
+		.bind(c.req.param('id'))
+		.first<NoteRow>();
 	if (!row) throw notFound('Note not found');
 	if (!(await hasAccess(c.env, user, 'note', row.id, row.user_id, 'write'))) throw forbidden();
 	await deleteGrants(c.env, 'note', row.id);

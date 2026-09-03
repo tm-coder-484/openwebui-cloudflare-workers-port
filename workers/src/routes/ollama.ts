@@ -22,7 +22,11 @@ async function baseUrls(c: any): Promise<string[]> {
 
 app.get('/config', async (c) => {
 	adminUser(c);
-	const config = await getConfigMany(c.env, ['ollama.enable', 'ollama.base_urls', 'ollama.api_configs']);
+	const config = await getConfigMany(c.env, [
+		'ollama.enable',
+		'ollama.base_urls',
+		'ollama.api_configs'
+	]);
 	return c.json({
 		ENABLE_OLLAMA_API: config['ollama.enable'],
 		OLLAMA_BASE_URLS: config['ollama.base_urls'],

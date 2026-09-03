@@ -80,7 +80,15 @@ export async function replaceGrants(
 				`INSERT INTO access_grant
 					(id, resource_type, resource_id, principal_type, principal_id, permission, created_at)
 				 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
-			).bind(uuid(), resourceType, resourceId, grant.principal_type, grant.principal_id, permission, timestamp)
+			).bind(
+				uuid(),
+				resourceType,
+				resourceId,
+				grant.principal_type,
+				grant.principal_id,
+				permission,
+				timestamp
+			)
 		);
 	}
 	await env.DB.batch(statements);

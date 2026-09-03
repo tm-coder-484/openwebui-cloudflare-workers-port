@@ -43,7 +43,8 @@ app.post('/config/update', async (c) => {
 	adminUser(c);
 	const body = (await c.req.json()) as Record<string, unknown>;
 	const updates: Record<string, unknown> = {};
-	for (const [field, key] of Object.entries(RAG_KEYS)) if (field in body) updates[key] = body[field];
+	for (const [field, key] of Object.entries(RAG_KEYS))
+		if (field in body) updates[key] = body[field];
 	await setConfigMany(c.env, updates);
 	return c.json(await readConfig(c));
 });

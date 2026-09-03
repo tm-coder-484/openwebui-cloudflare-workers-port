@@ -70,16 +70,16 @@ npm --prefix workers run deploy
 
 ## Architecture
 
-| Open WebUI (Python)            | This port (Cloudflare)                                  |
-| ------------------------------ | ------------------------------------------------------- |
-| FastAPI + Uvicorn              | Hono router inside a single Worker (`workers/src`)      |
-| SQLite / PostgreSQL            | **D1** (`workers/migrations/0001_init.sql`)             |
-| Local disk / S3 uploads        | **R2** (`FILES` binding)                                |
-| Redis (sessions, pub/sub)      | **Durable Object** `SocketHub` + KV for caching         |
-| python-socketio                | Hand-written Engine.IO v4 / Socket.IO v5 codec in the DO |
-| Chroma / pgvector              | **Vectorize** (optional) or keyword scoring over D1     |
-| Static files via FastAPI       | **Workers Static Assets** with SPA fallback             |
-| `sentence-transformers`, Whisper | **Workers AI** (optional binding)                     |
+| Open WebUI (Python)              | This port (Cloudflare)                                   |
+| -------------------------------- | -------------------------------------------------------- |
+| FastAPI + Uvicorn                | Hono router inside a single Worker (`workers/src`)       |
+| SQLite / PostgreSQL              | **D1** (`workers/migrations/0001_init.sql`)              |
+| Local disk / S3 uploads          | **R2** (`FILES` binding)                                 |
+| Redis (sessions, pub/sub)        | **Durable Object** `SocketHub` + KV for caching          |
+| python-socketio                  | Hand-written Engine.IO v4 / Socket.IO v5 codec in the DO |
+| Chroma / pgvector                | **Vectorize** (optional) or keyword scoring over D1      |
+| Static files via FastAPI         | **Workers Static Assets** with SPA fallback              |
+| `sentence-transformers`, Whisper | **Workers AI** (optional binding)                        |
 
 ### How a chat message actually flows
 
@@ -123,18 +123,18 @@ workers/
 Runtime settings live in the D1 `config` table and are editable from **Admin
 Settings** in the UI. Worker vars only seed the defaults on first read.
 
-| Variable                | Purpose                                                       |
-| ----------------------- | ------------------------------------------------------------- |
-| `WEBUI_SECRET_KEY`      | **Required in production.** Signs session JWTs (set as secret) |
-| `OPENAI_API_BASE_URL(S)`| Comma-separated OpenAI-compatible endpoints                    |
-| `OPENAI_API_KEY(S)`     | Matching keys, positionally paired with the URLs               |
-| `ENABLE_WORKERS_AI`     | Expose Workers AI models (needs the `[ai]` binding)            |
-| `WORKERS_AI_MODELS`     | Override the built-in Workers AI model list                    |
-| `DEFAULT_MODELS`        | Comma-separated default model ids for new chats                |
-| `DEFAULT_USER_ROLE`     | `pending` (default), `user`, or `admin` for new signups        |
-| `ENABLE_SIGNUP`         | Allow self-service signup after the first admin exists         |
-| `JWT_EXPIRES_IN`        | `-1` (never), or `30m`, `12h`, `7d`…                           |
-| `WEBUI_NAME`            | Branding shown in the UI                                       |
+| Variable                 | Purpose                                                        |
+| ------------------------ | -------------------------------------------------------------- |
+| `WEBUI_SECRET_KEY`       | **Required in production.** Signs session JWTs (set as secret) |
+| `OPENAI_API_BASE_URL(S)` | Comma-separated OpenAI-compatible endpoints                    |
+| `OPENAI_API_KEY(S)`      | Matching keys, positionally paired with the URLs               |
+| `ENABLE_WORKERS_AI`      | Expose Workers AI models (needs the `[ai]` binding)            |
+| `WORKERS_AI_MODELS`      | Override the built-in Workers AI model list                    |
+| `DEFAULT_MODELS`         | Comma-separated default model ids for new chats                |
+| `DEFAULT_USER_ROLE`      | `pending` (default), `user`, or `admin` for new signups        |
+| `ENABLE_SIGNUP`          | Allow self-service signup after the first admin exists         |
+| `JWT_EXPIRES_IN`         | `-1` (never), or `30m`, `12h`, `7d`…                           |
+| `WEBUI_NAME`             | Branding shown in the UI                                       |
 
 Secrets go through `wrangler secret put`; plain vars can live in `[vars]` in
 `wrangler.toml`.
@@ -184,16 +184,16 @@ extra services.
 
 **Not supported (and why)**
 
-| Feature | Reason |
-| --- | --- |
+| Feature                                            | Reason                                                                                                                                       |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Python tools, functions, pipes, filters, pipelines | The Workers runtime has no Python interpreter. Rows are stored and listed but never executed; `/api/config` reports `enable_plugins: false`. |
-| Server-side code execution (Jupyter) | Same. The in-browser Pyodide interpreter still works. |
-| LDAP, OAuth/OIDC, SCIM | Not ported. Email/password and API keys cover self-hosting; the admin screens return inert config. |
-| Ollama on `localhost` | A deployed Worker cannot reach private addresses — expose Ollama over HTTPS (e.g. Cloudflare Tunnel) and set its URL. |
-| Web search providers | The wiring exists but no provider is implemented; URL ingestion (`#https://…`) does work. |
-| Socket.IO long-polling | Only the WebSocket transport is implemented; `/api/config` always reports `enable_websocket: true`. |
-| Server-side Yjs merge | Note collaboration relays updates between clients instead of merging them server-side. |
-| Server-side PDF export, `black` formatting | Both need Python/native binaries. |
+| Server-side code execution (Jupyter)               | Same. The in-browser Pyodide interpreter still works.                                                                                        |
+| LDAP, OAuth/OIDC, SCIM                             | Not ported. Email/password and API keys cover self-hosting; the admin screens return inert config.                                           |
+| Ollama on `localhost`                              | A deployed Worker cannot reach private addresses — expose Ollama over HTTPS (e.g. Cloudflare Tunnel) and set its URL.                        |
+| Web search providers                               | The wiring exists but no provider is implemented; URL ingestion (`#https://…`) does work.                                                    |
+| Socket.IO long-polling                             | Only the WebSocket transport is implemented; `/api/config` always reports `enable_websocket: true`.                                          |
+| Server-side Yjs merge                              | Note collaboration relays updates between clients instead of merging them server-side.                                                       |
+| Server-side PDF export, `black` formatting         | Both need Python/native binaries.                                                                                                            |
 
 ---
 
@@ -218,11 +218,17 @@ npx wrangler d1 export open-webui --remote --output backup.sql
 npm --prefix workers exec -- wrangler tail
 ```
 
-**Tests and typecheck**
+**Tests**
 
 ```bash
-npm --prefix workers test        # vitest
-npm --prefix workers run typecheck
+npm --prefix workers test                 # vitest unit tests
+npm --prefix workers run typecheck        # tsc --noEmit
+
+# End-to-end check against a running deployment (local or on Cloudflare).
+# Signs in, exercises chats, files, knowledge, notes, memories, channels,
+# a streamed completion over the socket, and the admin endpoints.
+SMOKE_EMAIL=you@example.com SMOKE_PASSWORD=... \
+  npm --prefix workers run smoke -- https://open-webui.<subdomain>.workers.dev
 ```
 
 ### Networking
@@ -230,7 +236,7 @@ npm --prefix workers run typecheck
 Deployed Workers can only reach public addresses. Anything on your LAN — Ollama,
 a local vLLM server, an internal OpenAI gateway — needs a public hostname, most
 easily through [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/).
-`wrangler dev` runs locally and *can* reach `localhost`, which is why the mock
+`wrangler dev` runs locally and _can_ reach `localhost`, which is why the mock
 model server works out of the box.
 
 ### Scaling notes
@@ -246,12 +252,12 @@ model server works out of the box.
 
 ### Limits worth knowing
 
-| Limit | Value |
-| --- | --- |
+| Limit                  | Value                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------- |
 | Worker CPU per request | 30 s (streaming happens in the Durable Object, so long generations are fine) |
-| D1 database size | 10 GB |
-| R2 object size | 5 TB |
-| Static assets | 20,000 files, 25 MiB each (sourcemaps are excluded by `build/.assetsignore`) |
+| D1 database size       | 10 GB                                                                        |
+| R2 object size         | 5 TB                                                                         |
+| Static assets          | 20,000 files, 25 MiB each (sourcemaps are excluded by `build/.assetsignore`) |
 
 ---
 

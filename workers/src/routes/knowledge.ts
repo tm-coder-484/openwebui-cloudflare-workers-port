@@ -3,7 +3,13 @@
 import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { verifiedUser } from '../lib/auth';
-import { hasAccess, listGrants, replaceGrants, deleteGrants, visibleResourceIdsClause } from '../lib/access';
+import {
+	hasAccess,
+	listGrants,
+	replaceGrants,
+	deleteGrants,
+	visibleResourceIdsClause
+} from '../lib/access';
 import { hasPermission } from '../lib/permissions';
 import { indexChunks, removeChunks, search } from '../lib/retrieval';
 import { bad, forbidden, notFound, now, parseJSON, toJSON, uuid } from '../lib/util';
@@ -70,14 +76,24 @@ async function visible(c: any) {
 
 app.get('/', async (c) => {
 	const rows = await visible(c);
-	const grants = await listGrants(c.env, 'knowledge', rows.map((row) => row.id));
+	const grants = await listGrants(
+		c.env,
+		'knowledge',
+		rows.map((row) => row.id)
+	);
 	return c.json(await Promise.all(rows.map((row) => serialize(c, row, grants.get(row.id) ?? []))));
 });
 
 app.get('/list', async (c) => {
 	const rows = await visible(c);
-	const grants = await listGrants(c.env, 'knowledge', rows.map((row) => row.id));
-	return c.json(await Promise.all(rows.map((row) => serialize(c, row, grants.get(row.id) ?? [], false))));
+	const grants = await listGrants(
+		c.env,
+		'knowledge',
+		rows.map((row) => row.id)
+	);
+	return c.json(
+		await Promise.all(rows.map((row) => serialize(c, row, grants.get(row.id) ?? [], false)))
+	);
 });
 
 app.post('/create', async (c) => {
@@ -92,8 +108,11 @@ app.post('/create', async (c) => {
 	)
 		.bind(id, user.id, body.name, body.description ?? '', toJSON(body.meta ?? {}), timestamp)
 		.run();
-	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'knowledge', id, body.access_grants);
-	const row = await c.env.DB.prepare('SELECT * FROM knowledge WHERE id = ?1').bind(id).first<KnowledgeRow>();
+	if (Array.isArray(body.access_grants))
+		await replaceGrants(c.env, 'knowledge', id, body.access_grants);
+	const row = await c.env.DB.prepare('SELECT * FROM knowledge WHERE id = ?1')
+		.bind(id)
+		.first<KnowledgeRow>();
 	return c.json(await serialize(c, row!));
 });
 
@@ -122,7 +141,8 @@ async function load(c: any, id: string, permission: 'read' | 'write' = 'read') {
 		.bind(id)
 		.first()) as KnowledgeRow | null;
 	if (!row) throw notFound('Knowledge base not found');
-	if (!(await hasAccess(c.env, user, 'knowledge', row.id, row.user_id, permission))) throw forbidden();
+	if (!(await hasAccess(c.env, user, 'knowledge', row.id, row.user_id, permission)))
+		throw forbidden();
 	return { row, user };
 }
 
@@ -151,7 +171,8 @@ app.post('/:id/update', async (c) => {
 			row.id
 		)
 		.run();
-	if (Array.isArray(body.access_grants)) await replaceGrants(c.env, 'knowledge', row.id, body.access_grants);
+	if (Array.isArray(body.access_grants))
+		await replaceGrants(c.env, 'knowledge', row.id, body.access_grants);
 	const updated = await c.env.DB.prepare('SELECT * FROM knowledge WHERE id = ?1')
 		.bind(row.id)
 		.first<KnowledgeRow>();
@@ -183,7 +204,9 @@ app.post('/:id/file/add', async (c) => {
 		.run();
 
 	// Re-index if the file was uploaded before it belonged to a collection.
-	const chunks = await c.env.DB.prepare('SELECT COUNT(*) AS count FROM file_chunk WHERE file_id = ?1')
+	const chunks = await c.env.DB.prepare(
+		'SELECT COUNT(*) AS count FROM file_chunk WHERE file_id = ?1'
+	)
 		.bind(file_id)
 		.first<{ count: number }>();
 	if (!chunks?.count) {
@@ -205,18 +228,22 @@ app.post('/:id/file/remove', async (c) => {
 	const { row } = await load(c, c.req.param('id'), 'write');
 	const { file_id } = (await c.req.json()) as { file_id: string };
 	await c.env.DB.batch([
-		c.env.DB.prepare('DELETE FROM knowledge_file WHERE knowledge_id = ?1 AND file_id = ?2').bind(row.id, file_id),
-		c.env.DB.prepare('UPDATE file_chunk SET knowledge_id = NULL WHERE file_id = ?1 AND knowledge_id = ?2').bind(
-			file_id,
-			row.id
-		)
+		c.env.DB.prepare('DELETE FROM knowledge_file WHERE knowledge_id = ?1 AND file_id = ?2').bind(
+			row.id,
+			file_id
+		),
+		c.env.DB.prepare(
+			'UPDATE file_chunk SET knowledge_id = NULL WHERE file_id = ?1 AND knowledge_id = ?2'
+		).bind(file_id, row.id)
 	]);
 	return c.json(await serialize(c, row));
 });
 
 app.post('/:id/reset', async (c) => {
 	const { row } = await load(c, c.req.param('id'), 'write');
-	const { results } = await c.env.DB.prepare('SELECT file_id FROM knowledge_file WHERE knowledge_id = ?1')
+	const { results } = await c.env.DB.prepare(
+		'SELECT file_id FROM knowledge_file WHERE knowledge_id = ?1'
+	)
 		.bind(row.id)
 		.all<{ file_id: string }>();
 	for (const file of results ?? []) await removeChunks(c.env, file.file_id);
@@ -229,7 +256,9 @@ app.delete('/:id/delete', async (c) => {
 	await deleteGrants(c.env, 'knowledge', row.id);
 	await c.env.DB.batch([
 		c.env.DB.prepare('DELETE FROM knowledge_file WHERE knowledge_id = ?1').bind(row.id),
-		c.env.DB.prepare('UPDATE file_chunk SET knowledge_id = NULL WHERE knowledge_id = ?1').bind(row.id),
+		c.env.DB.prepare('UPDATE file_chunk SET knowledge_id = NULL WHERE knowledge_id = ?1').bind(
+			row.id
+		),
 		c.env.DB.prepare('DELETE FROM knowledge WHERE id = ?1').bind(row.id)
 	]);
 	return c.json(true);

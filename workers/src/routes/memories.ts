@@ -50,9 +50,19 @@ app.post('/add', async (c) => {
 		`INSERT INTO memory (id, user_id, type, path, content, meta, created_at, updated_at)
 		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`
 	)
-		.bind(id, user.id, body.type === 'user' ? 'user' : 'context', body.path ?? null, body.content, toJSON({}), timestamp)
+		.bind(
+			id,
+			user.id,
+			body.type === 'user' ? 'user' : 'context',
+			body.path ?? null,
+			body.content,
+			toJSON({}),
+			timestamp
+		)
 		.run();
-	const row = await c.env.DB.prepare('SELECT * FROM memory WHERE id = ?1').bind(id).first<MemoryRow>();
+	const row = await c.env.DB.prepare('SELECT * FROM memory WHERE id = ?1')
+		.bind(id)
+		.first<MemoryRow>();
 	return c.json(serialize(row!));
 });
 
