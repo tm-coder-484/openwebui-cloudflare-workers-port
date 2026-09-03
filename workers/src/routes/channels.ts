@@ -73,6 +73,47 @@ const serializeChannel = (row: ChannelRow, grants: any[] = []) => ({
 	updated_at: row.updated_at
 });
 
+const serializeWebhook = (row: any) => ({
+	id: row.id,
+	channel_id: row.channel_id,
+	user_id: row.user_id,
+	name: row.name,
+	url: row.url,
+	events: parseJSON<string[]>(row.events, ['message']),
+	enabled: toBool(row.enabled),
+	created_at: row.created_at,
+	updated_at: row.updated_at
+});
+
+/** Posts a message to every enabled webhook on the channel. */
+async function deliverWebhooks(c: any, channel: ChannelRow, event: string, payload: unknown) {
+	const { results } = await c.env.DB.prepare(
+		'SELECT * FROM channel_webhook WHERE channel_id = ?1 AND enabled = 1'
+	)
+		.bind(channel.id)
+		.all()
+		.catch(() => ({ results: [] as any[] }));
+
+	const deliveries = ((results ?? []) as any[])
+		.filter((webhook) => parseJSON<string[]>(webhook.events, ['message']).includes(event))
+		.map((webhook) =>
+			fetch(webhook.url, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					event,
+					channel: { id: channel.id, name: channel.name },
+					data: payload
+				}),
+				signal: AbortSignal.timeout(10_000)
+			}).catch((error) => console.warn('[open-webui] webhook delivery failed:', error))
+		);
+
+	if (deliveries.length) {
+		c.executionCtx?.waitUntil?.(Promise.allSettled(deliveries));
+	}
+}
+
 async function serializeMessage(c: any, row: MessageRow) {
 	const author = await getUserById(c.env, row.user_id);
 	const { results: reactions } = await c.env.DB.prepare(
@@ -238,7 +279,8 @@ app.delete('/:id/delete', async (c) => {
 			user.id,
 			row.id
 		),
-		c.env.DB.prepare('DELETE FROM channel_member WHERE channel_id = ?1').bind(row.id)
+		c.env.DB.prepare('DELETE FROM channel_member WHERE channel_id = ?1').bind(row.id),
+		c.env.DB.prepare('DELETE FROM channel_webhook WHERE channel_id = ?1').bind(row.id)
 	]);
 	return c.json(true);
 });
@@ -310,6 +352,7 @@ app.post('/:id/messages/post', async (c) => {
 			user: publicUser({ ...user, profile_image_url: user.profile_image_url } as any)
 		}
 	]);
+	await deliverWebhooks(c, row, 'message', payload);
 	return c.json(payload);
 });
 
@@ -481,9 +524,81 @@ app.post('/:id/update/members/remove', async (c) => {
 	return c.json(true);
 });
 
+/**
+ * Channel webhooks: outbound notifications for new messages. Delivery is
+ * fire-and-forget so a slow or dead endpoint never delays a post.
+ */
 app.get('/:id/webhooks', async (c) => {
-	await loadChannel(c, c.req.param('id'));
-	return c.json([]);
+	const { row } = await loadChannel(c, c.req.param('id'));
+	const { results } = await c.env.DB.prepare(
+		'SELECT * FROM channel_webhook WHERE channel_id = ?1 ORDER BY created_at DESC'
+	)
+		.bind(row.id)
+		.all();
+	return c.json(((results ?? []) as any[]).map(serializeWebhook));
+});
+
+app.post('/:id/webhooks/create', async (c) => {
+	const { row, user } = await loadChannel(c, c.req.param('id'), 'write');
+	const body = (await c.req.json()) as any;
+	if (!body?.url) throw bad('A webhook URL is required');
+	const id = uuid();
+	const timestamp = now();
+	await c.env.DB.prepare(
+		`INSERT INTO channel_webhook (id, channel_id, user_id, name, url, events, enabled, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)`
+	)
+		.bind(
+			id,
+			row.id,
+			user.id,
+			body.name ?? null,
+			body.url,
+			toJSON(body.events ?? ['message']),
+			body.enabled === false ? 0 : 1,
+			timestamp
+		)
+		.run();
+	const webhook = await c.env.DB.prepare('SELECT * FROM channel_webhook WHERE id = ?1')
+		.bind(id)
+		.first();
+	return c.json(serializeWebhook(webhook));
+});
+
+app.post('/:id/webhooks/:webhookId/update', async (c) => {
+	const { row } = await loadChannel(c, c.req.param('id'), 'write');
+	const body = (await c.req.json()) as any;
+	const existing = (await c.env.DB.prepare(
+		'SELECT * FROM channel_webhook WHERE id = ?1 AND channel_id = ?2'
+	)
+		.bind(c.req.param('webhookId'), row.id)
+		.first()) as any;
+	if (!existing) throw notFound('Webhook not found');
+
+	await c.env.DB.prepare(
+		'UPDATE channel_webhook SET name = ?1, url = ?2, events = ?3, enabled = ?4, updated_at = ?5 WHERE id = ?6'
+	)
+		.bind(
+			body.name === undefined ? existing.name : body.name,
+			body.url ?? existing.url,
+			toJSON(body.events ?? parseJSON(existing.events, ['message'])),
+			body.enabled === undefined ? existing.enabled : body.enabled ? 1 : 0,
+			now(),
+			existing.id
+		)
+		.run();
+	const updated = await c.env.DB.prepare('SELECT * FROM channel_webhook WHERE id = ?1')
+		.bind(existing.id)
+		.first();
+	return c.json(serializeWebhook(updated));
+});
+
+app.delete('/:id/webhooks/:webhookId/delete', async (c) => {
+	const { row } = await loadChannel(c, c.req.param('id'), 'write');
+	await c.env.DB.prepare('DELETE FROM channel_webhook WHERE id = ?1 AND channel_id = ?2')
+		.bind(c.req.param('webhookId'), row.id)
+		.run();
+	return c.json(true);
 });
 
 export default app;

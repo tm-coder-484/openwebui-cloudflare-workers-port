@@ -247,9 +247,11 @@ citations.
   provider, and Workers AI
 - Multi-model (side-by-side) responses
 - Automatic title, tag and follow-up generation
-- Workspace: models (presets and overrides), prompts, knowledge, skills
+- Workspace: models (presets and overrides), prompts with version history and
+  diffs, knowledge bases with directories, skills
 - Files in R2 with text extraction, chunking and retrieval
-- Notes (with realtime collaboration relay) and Channels (realtime messaging)
+- Notes (with realtime collaboration relay) and Channels (realtime messaging
+  and outbound webhooks)
 - Automations: scheduled prompts driven by a Cron Trigger, with run history
 - Calendar: calendars, recurring events, attendees and RSVPs, plus a read-only
   "Scheduled Tasks" calendar showing automation runs

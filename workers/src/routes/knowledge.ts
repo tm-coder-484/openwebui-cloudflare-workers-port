@@ -28,7 +28,8 @@ interface KnowledgeRow {
 
 async function filesFor(c: any, knowledgeId: string) {
 	const { results } = await c.env.DB.prepare(
-		`SELECT f.* FROM file f JOIN knowledge_file k ON k.file_id = f.id
+		`SELECT f.*, k.directory_id AS directory_id FROM file f
+		 JOIN knowledge_file k ON k.file_id = f.id
 		 WHERE k.knowledge_id = ?1 ORDER BY f.created_at DESC`
 	)
 		.bind(knowledgeId)
@@ -37,11 +38,21 @@ async function filesFor(c: any, knowledgeId: string) {
 		id: row.id,
 		user_id: row.user_id,
 		filename: row.filename,
+		directory_id: row.directory_id ?? null,
 		meta: parseJSON<Record<string, unknown>>(row.meta, {}),
 		data: parseJSON<Record<string, unknown>>(row.data, {}),
 		created_at: row.created_at,
 		updated_at: row.updated_at
 	}));
+}
+
+async function directoriesFor(c: any, knowledgeId: string) {
+	const { results } = await c.env.DB.prepare(
+		'SELECT * FROM knowledge_directory WHERE knowledge_id = ?1 ORDER BY name ASC'
+	)
+		.bind(knowledgeId)
+		.all();
+	return results ?? [];
 }
 
 async function serialize(c: any, row: KnowledgeRow, grants: any[] = [], withFiles = true) {
@@ -57,7 +68,9 @@ async function serialize(c: any, row: KnowledgeRow, grants: any[] = [], withFile
 			principal_id: grant.principal_id,
 			permission: grant.permission
 		})),
-		...(withFiles ? { files: await filesFor(c, row.id) } : {}),
+		...(withFiles
+			? { files: await filesFor(c, row.id), directories: await directoriesFor(c, row.id) }
+			: {}),
 		created_at: row.created_at,
 		updated_at: row.updated_at
 	};
@@ -270,10 +283,94 @@ app.get('/:id/files/pending', async (c) => {
 	return c.json([]);
 });
 
-app.post('/:id/file/move', async (c) => {
-	// Knowledge bases are flat in this port (no directory tree), so a move is a
-	// no-op that returns the collection unchanged.
+app.post('/:id/dirs/create', async (c) => {
+	const { row, user } = await load(c, c.req.param('id'), 'write');
+	const body = (await c.req.json()) as { name?: string; parent_id?: string | null };
+	if (!body.name) throw bad('A directory name is required');
+	const id = uuid();
+	const timestamp = now();
+	await c.env.DB.prepare(
+		`INSERT INTO knowledge_directory (id, knowledge_id, parent_id, name, user_id, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)`
+	)
+		.bind(id, row.id, body.parent_id ?? null, body.name, user.id, timestamp)
+		.run();
+	const dir = await c.env.DB.prepare('SELECT * FROM knowledge_directory WHERE id = ?1')
+		.bind(id)
+		.first();
+	return c.json(dir);
+});
+
+app.post('/:id/dirs/:dirId/update', async (c) => {
 	const { row } = await load(c, c.req.param('id'), 'write');
+	const body = (await c.req.json()) as { name?: string; parent_id?: string | null };
+	const dirId = c.req.param('dirId');
+	if (body.parent_id === dirId) throw bad('A directory cannot be its own parent.');
+	const existing = await c.env.DB.prepare(
+		'SELECT * FROM knowledge_directory WHERE id = ?1 AND knowledge_id = ?2'
+	)
+		.bind(dirId, row.id)
+		.first<any>();
+	if (!existing) throw notFound('Directory not found');
+
+	await c.env.DB.prepare(
+		'UPDATE knowledge_directory SET name = ?1, parent_id = ?2, updated_at = ?3 WHERE id = ?4'
+	)
+		.bind(
+			body.name ?? existing.name,
+			body.parent_id === undefined ? existing.parent_id : body.parent_id,
+			now(),
+			dirId
+		)
+		.run();
+	const dir = await c.env.DB.prepare('SELECT * FROM knowledge_directory WHERE id = ?1')
+		.bind(dirId)
+		.first();
+	return c.json(dir);
+});
+
+app.delete('/:id/dirs/:dirId/delete', async (c) => {
+	const { row } = await load(c, c.req.param('id'), 'write');
+	const dirId = c.req.param('dirId');
+	// Children and files move up to the parent rather than disappearing.
+	const existing = await c.env.DB.prepare(
+		'SELECT * FROM knowledge_directory WHERE id = ?1 AND knowledge_id = ?2'
+	)
+		.bind(dirId, row.id)
+		.first<any>();
+	if (!existing) throw notFound('Directory not found');
+
+	await c.env.DB.batch([
+		c.env.DB.prepare('UPDATE knowledge_directory SET parent_id = ?1 WHERE parent_id = ?2').bind(
+			existing.parent_id ?? null,
+			dirId
+		),
+		c.env.DB.prepare('UPDATE knowledge_file SET directory_id = ?1 WHERE directory_id = ?2').bind(
+			existing.parent_id ?? null,
+			dirId
+		),
+		c.env.DB.prepare('DELETE FROM knowledge_directory WHERE id = ?1').bind(dirId)
+	]);
+	return c.json(true);
+});
+
+app.post('/:id/file/move', async (c) => {
+	const { row } = await load(c, c.req.param('id'), 'write');
+	const body = (await c.req.json()) as { file_id?: string; directory_id?: string | null };
+	if (!body.file_id) throw bad('file_id is required');
+	if (body.directory_id) {
+		const dir = await c.env.DB.prepare(
+			'SELECT id FROM knowledge_directory WHERE id = ?1 AND knowledge_id = ?2'
+		)
+			.bind(body.directory_id, row.id)
+			.first();
+		if (!dir) throw notFound('Directory not found');
+	}
+	await c.env.DB.prepare(
+		'UPDATE knowledge_file SET directory_id = ?1 WHERE knowledge_id = ?2 AND file_id = ?3'
+	)
+		.bind(body.directory_id ?? null, row.id, body.file_id)
+		.run();
 	return c.json(await serialize(c, row));
 });
 
