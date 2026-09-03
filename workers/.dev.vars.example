@@ -1,0 +1,14 @@
+# Copy to workers/.dev.vars for local development (`wrangler dev` loads it automatically).
+# Never commit the real file — it holds secrets.
+
+# Signs session JWTs. Generate one with:
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+WEBUI_SECRET_KEY=change-me
+
+# Any OpenAI-compatible endpoint. Comma-separate to configure several.
+# OPENAI_API_BASE_URL=https://api.openai.com/v1
+# OPENAI_API_KEY=sk-...
+
+# Local mock model server (`node workers/scripts/mock-openai.mjs`):
+# OPENAI_API_BASE_URL=http://127.0.0.1:11435/v1
+# OPENAI_API_KEY=mock-key

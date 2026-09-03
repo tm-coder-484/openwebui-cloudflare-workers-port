@@ -21,6 +21,16 @@ Passionate about open-source AI? [Join our team →](https://careers.openwebui.c
 
 For more information, be sure to check out our [Open WebUI Documentation](https://docs.openwebui.com/).
 
+> [!IMPORTANT]
+> **This fork runs Open WebUI on Cloudflare Workers.** The Python backend in
+> `backend/` is kept for reference; the backend that actually runs is the
+> TypeScript port in [`workers/`](workers), which uses D1 for the database, R2
+> for uploads, a Durable Object for realtime, and Workers Static Assets for the
+> UI. Start locally with `./start-workers.sh --mock` and deploy with
+> `./deploy-workers.sh` — see **[CLOUDFLARE.md](CLOUDFLARE.md)** for the full
+> guide, configuration reference, and the list of features that do and do not
+> carry over.
+
 ## Key Features of Open WebUI ⭐
 
 - 🚀 **Effortless Setup**: Install seamlessly via pip, uv, Docker, or Kubernetes (kubectl, kustomize, or helm), with `:ollama` and `:cuda` tagged images available for container deployments.
