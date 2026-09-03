@@ -36,6 +36,8 @@ export interface Env {
 	OPENAI_API_BASE_URLS?: string;
 	ENABLE_OPENAI_API?: string;
 	JWT_EXPIRES_IN?: string;
+	WEB_SEARCH_API_KEY?: string;
+	WEB_SEARCH_URL?: string;
 	RAG_EMBEDDING_MODEL?: string;
 	TASK_MODEL?: string;
 }

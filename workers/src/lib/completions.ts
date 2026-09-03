@@ -21,6 +21,7 @@ import {
 	renderMessages
 } from './prompts';
 import { search } from './retrieval';
+import { fetchPageText, webSearch } from './websearch';
 import { HttpError, now, toJSON } from './util';
 
 /** OpenAI sampling parameters we forward; everything else is Open WebUI's own. */
@@ -436,6 +437,11 @@ export async function runCompletion(
 			job.body = { ...job.body, messages: [...requestMessages, ...history] };
 		}
 
+		// Web search runs before the model call and becomes part of the context.
+		if (job.body.features?.web_search) {
+			await runWebSearch(env, job, emit);
+		}
+
 		// Attached files and knowledge bases become a retrieved context block.
 		const attached = (job.body.files ?? []) as AttachedFile[];
 		if (attached.length) {
@@ -581,6 +587,83 @@ async function recordTurn(
 	await env.DB.batch(statements).catch((error) =>
 		console.warn('[open-webui] failed to record chat_message rows:', error)
 	);
+}
+
+/**
+ * Searches the web for the current turn, appends the pages as sources, and
+ * reports progress through the same status events the Python backend emits.
+ */
+async function runWebSearch(env: Env, job: CompletionJob, emit: EventEmitter): Promise<void> {
+	const messages = (job.body.messages ?? []) as CompletionMessage[];
+	const query = lastUserText(messages);
+	if (!query) return;
+
+	const status = (data: Record<string, unknown>) =>
+		emit({
+			chat_id: job.chatId,
+			message_id: job.messageId,
+			data: { type: 'status', data: { action: 'web_search', ...data } }
+		});
+
+	await status({ description: `Searching the web for "${query.slice(0, 80)}"`, done: false });
+
+	try {
+		const results = await webSearch(env, query);
+		if (!results.length) {
+			await status({ description: 'No web results found', done: true });
+			return;
+		}
+
+		const parts: string[] = [];
+		const sources: Record<string, unknown>[] = [];
+		for (const [index, result] of results.entries()) {
+			const text = (await fetchPageText(result.url)) || result.snippet;
+			if (!text) continue;
+			parts.push(
+				`<source id="${index + 1}" name="${result.title || result.url}" url="${result.url}">${text}</source>`
+			);
+			sources.push({
+				source: { name: result.title || result.url, url: result.url, id: result.url },
+				document: [text],
+				metadata: [{ source: result.url, name: result.title || result.url }]
+			});
+		}
+
+		if (parts.length) {
+			job.body = {
+				...job.body,
+				messages: [
+					{
+						role: 'system',
+						content:
+							'The following web pages were retrieved for this question. Use them to answer, ' +
+							`cite them inline as [id], and say so if they do not contain the answer.\n\n${parts.join('\n')}`
+					},
+					...messages
+				]
+			};
+			for (const source of sources) {
+				await emit({
+					chat_id: job.chatId,
+					message_id: job.messageId,
+					data: { type: 'source', data: source }
+				});
+			}
+			if (job.saveToChat) {
+				await upsertMessage(env, job.chatId, job.messageId, { sources });
+			}
+		}
+
+		await status({
+			description: `Searched the web (${parts.length} page${parts.length === 1 ? '' : 's'})`,
+			done: true,
+			urls: results.map((result) => result.url)
+		});
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.warn('[open-webui] web search failed:', message);
+		await status({ description: `Web search failed: ${message}`, done: true, error: true });
+	}
 }
 
 async function* streamUpstream(

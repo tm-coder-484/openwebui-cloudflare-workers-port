@@ -191,6 +191,22 @@ Without Vectorize, retrieval falls back to TF-IDF-style keyword scoring over the
 chunks stored in D1 — good enough for small knowledge bases, and it needs no
 extra services.
 
+### Web search
+
+Enable it under **Admin Settings → Web Search**, or with the config API. Five
+providers ship, all over plain `fetch`:
+
+| `WEB_SEARCH_ENGINE`         | Needs                                                  |
+| --------------------------- | ------------------------------------------------------ |
+| `duckduckgo` (default)      | nothing — best-effort HTML scrape, can be rate-limited |
+| `searxng`                   | `WEB_SEARCH_URL` pointing at your instance             |
+| `tavily`, `serper`, `brave` | `WEB_SEARCH_API_KEY`                                   |
+
+When a chat turn has web search enabled, the Worker searches, fetches the top
+results, reports progress through the same `status` events as upstream, injects
+the pages as `<source>` context, and stores them as files so the answer carries
+citations.
+
 ---
 
 ## What works, and what does not
@@ -208,6 +224,8 @@ extra services.
 - Files in R2 with text extraction, chunking and retrieval
 - Notes (with realtime collaboration relay) and Channels (realtime messaging)
 - Memories, feedback/evaluations, admin usage analytics
+- Web search in chat (DuckDuckGo, SearXNG, Tavily, Serper, Brave) with page
+  retrieval, status updates and citations
 - Text-to-speech and transcription (Workers AI Whisper or an OpenAI endpoint)
 - Image generation (OpenAI-compatible or Workers AI)
 

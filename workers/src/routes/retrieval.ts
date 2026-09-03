@@ -5,6 +5,7 @@ import type { AppContext } from '../types';
 import { adminUser, verifiedUser } from '../lib/auth';
 import { getConfigMany, setConfigMany } from '../lib/config';
 import { indexChunks, search } from '../lib/retrieval';
+import { fetchPageText, webSearch } from '../lib/websearch';
 import { sha256Hex } from '../lib/crypto';
 import { bad, now, toJSON, uuid } from '../lib/util';
 
@@ -23,6 +24,9 @@ const RAG_KEYS: Record<string, string> = {
 	FILE_MAX_COUNT: 'rag.file.max_count',
 	ENABLE_WEB_SEARCH: 'web.search.enable',
 	WEB_SEARCH_ENGINE: 'web.search.engine',
+	WEB_SEARCH_API_KEY: 'web.search.api_key',
+	WEB_SEARCH_URL: 'web.search.url',
+	SEARXNG_QUERY_URL: 'web.search.url',
 	WEB_SEARCH_RESULT_COUNT: 'web.search.result_count',
 	WEB_LOADER_ENGINE: 'web.loader.engine'
 };
@@ -200,11 +204,75 @@ app.post('/process/web', async (c) => {
 
 app.post('/process/url', async (c) => c.redirect('/api/v1/retrieval/process/web', 307));
 
+/**
+ * Runs a web search, stores each result page as a file, and returns the
+ * documents so the caller can cite them.
+ */
 app.post('/process/web/search', async (c) => {
-	verifiedUser(c);
-	throw bad(
-		'Web search is not configured. Point WEB_SEARCH_ENGINE at a provider that exposes an HTTP API.'
-	);
+	const user = verifiedUser(c);
+	const body = (await c.req.json()) as { query?: string; queries?: string[] };
+	const queries = body.queries?.length ? body.queries : body.query ? [body.query] : [];
+	if (!queries.length) throw bad('A search query is required');
+
+	const seen = new Set<string>();
+	const results = [];
+	for (const query of queries.slice(0, 3)) {
+		for (const result of await webSearch(c.env, query)) {
+			if (seen.has(result.url)) continue;
+			seen.add(result.url);
+			results.push(result);
+		}
+	}
+
+	const timestamp = now();
+	const docs = [];
+	const files = [];
+	for (const result of results) {
+		const text = (await fetchPageText(result.url)) || result.snippet;
+		if (!text) continue;
+
+		const id = uuid();
+		await c.env.DB.prepare(
+			`INSERT INTO file (id, user_id, hash, filename, path, data, meta, created_at, updated_at)
+			 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7, ?7)`
+		)
+			.bind(
+				id,
+				user.id,
+				await sha256Hex(result.url),
+				result.title || result.url,
+				toJSON({ content: text }),
+				toJSON({
+					name: result.title || result.url,
+					content_type: 'text/html',
+					source: result.url,
+					snippet: result.snippet
+				}),
+				timestamp
+			)
+			.run();
+		await indexChunks(c.env, { fileId: id, userId: user.id, text });
+
+		files.push({
+			id,
+			filename: result.title || result.url,
+			meta: { name: result.title || result.url, source: result.url }
+		});
+		docs.push({
+			content: text,
+			metadata: { source: result.url, title: result.title, name: result.title || result.url }
+		});
+	}
+
+	return c.json({
+		status: true,
+		collection_name: null,
+		filenames: results.map((result) => result.url),
+		items: results,
+		files,
+		docs,
+		loaded_count: docs.length
+	});
 });
 
 /** Crude tag stripper — enough to make a page searchable without a DOM. */
