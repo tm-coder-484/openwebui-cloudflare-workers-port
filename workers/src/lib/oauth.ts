@@ -104,50 +104,65 @@ export const OAUTH_CONFIG_KEYS: Record<string, string> = {
 const text = (value: unknown, fallback = ''): string =>
 	value === null || value === undefined ? fallback : String(value);
 
-/** Reads every OAuth setting, preferring the config store over env defaults. */
+/**
+ * Reads every OAuth setting. Upstream reads all of these from the environment,
+ * so each one resolves stored value -> Worker var -> documented default: a
+ * deployment can be configured entirely by `wrangler secret`, and an admin who
+ * saves the Authentication screen takes over from there.
+ */
 export async function oauthSettings(env: Env): Promise<OAuthSettings> {
 	const config = await getConfigMany(env, Object.values(OAUTH_CONFIG_KEYS));
-	// getConfigMany already resolves DEFAULT_CONFIG, so a missing row reads as
-	// the documented default.
-	const get = (key: string) => config[key];
 
-	// `ENABLE_OAUTH` defaults on upstream, so an env-configured provider works
-	// with no admin action; the stored value still wins once an admin saves.
-	const stored = config['oauth.enable'];
-	const enable =
-		stored === null || stored === undefined
-			? env.ENABLE_OAUTH === undefined || toBool(env.ENABLE_OAUTH)
-			: toBool(stored);
+	/**
+	 * These keys are deliberately absent from `DEFAULT_CONFIG`: an unwritten row
+	 * must read as undefined here so the Worker var below can supply the value.
+	 */
+	const written = (key: string) => {
+		const value = config[key];
+		return value === null || value === undefined ? undefined : value;
+	};
+	const str = (key: string, variable: string | undefined, fallback = '') =>
+		text(written(key) ?? variable ?? fallback, fallback);
+	const bool = (key: string, variable: string | undefined, fallback = false) => {
+		const stored = written(key);
+		if (stored !== undefined) return toBool(stored);
+		return variable === undefined ? fallback : toBool(variable);
+	};
 
 	return {
-		enable,
-		providerName: text(get('oauth.provider_name'), 'SSO') || 'SSO',
-		clientId: text(get('oauth.client_id')) || text(env.OAUTH_CLIENT_ID),
-		clientSecret: text(get('oauth.client_secret')) || text(env.OAUTH_CLIENT_SECRET),
-		openidProviderUrl: text(get('oauth.openid_provider_url')) || text(env.OPENID_PROVIDER_URL),
-		openidRedirectUri: text(get('oauth.openid_redirect_uri')) || text(env.OPENID_REDIRECT_URI),
-		scopes: text(get('oauth.scopes'), 'openid email profile') || 'openid email profile',
-		emailClaim: text(get('oauth.email_claim'), 'email') || 'email',
-		usernameClaim: text(get('oauth.username_claim'), 'name') || 'name',
-		pictureClaim: text(get('oauth.picture_claim'), 'picture') || 'picture',
-		subClaim: text(get('oauth.sub_claim')),
-		groupClaim: text(get('oauth.group_claim'), 'groups') || 'groups',
-		rolesClaim: text(get('oauth.roles_claim'), 'roles') || 'roles',
-		enableSignup: toBool(get('oauth.enable_signup')),
-		mergeAccountsByEmail: toBool(get('oauth.merge_accounts_by_email')),
-		autoRedirect: toBool(get('oauth.auto_redirect')),
-		allowedDomains: csv(text(get('oauth.allowed_domains'), '*') || '*').map((domain) =>
-			domain.toLowerCase()
+		// Defaults on, as upstream does: with no credentials configured there are
+		// no providers to show, and setting only the client id/secret is enough
+		// to switch SSO on without a second toggle.
+		enable: bool('oauth.enable', env.ENABLE_OAUTH, true),
+		providerName: str('oauth.provider_name', env.OAUTH_PROVIDER_NAME, 'SSO') || 'SSO',
+		clientId: str('oauth.client_id', env.OAUTH_CLIENT_ID),
+		clientSecret: str('oauth.client_secret', env.OAUTH_CLIENT_SECRET),
+		openidProviderUrl: str('oauth.openid_provider_url', env.OPENID_PROVIDER_URL),
+		openidRedirectUri: str('oauth.openid_redirect_uri', env.OPENID_REDIRECT_URI),
+		scopes: str('oauth.scopes', env.OAUTH_SCOPES, 'openid email profile') || 'openid email profile',
+		emailClaim: str('oauth.email_claim', env.OAUTH_EMAIL_CLAIM, 'email') || 'email',
+		usernameClaim: str('oauth.username_claim', env.OAUTH_USERNAME_CLAIM, 'name') || 'name',
+		pictureClaim: str('oauth.picture_claim', env.OAUTH_PICTURE_CLAIM, 'picture') || 'picture',
+		subClaim: str('oauth.sub_claim', env.OAUTH_SUB_CLAIM),
+		groupClaim: str('oauth.group_claim', env.OAUTH_GROUPS_CLAIM, 'groups') || 'groups',
+		rolesClaim: str('oauth.roles_claim', env.OAUTH_ROLES_CLAIM, 'roles') || 'roles',
+		enableSignup: bool('oauth.enable_signup', env.ENABLE_OAUTH_SIGNUP),
+		mergeAccountsByEmail: bool('oauth.merge_accounts_by_email', env.OAUTH_MERGE_ACCOUNTS_BY_EMAIL),
+		autoRedirect: bool('oauth.auto_redirect', env.OAUTH_AUTO_REDIRECT),
+		allowedDomains: csv(str('oauth.allowed_domains', env.OAUTH_ALLOWED_DOMAINS, '*') || '*').map(
+			(domain) => domain.toLowerCase()
 		),
-		enableRoleManagement: toBool(get('oauth.enable_role_management')),
-		enableGroupManagement: toBool(get('oauth.enable_group_management')),
-		enableGroupCreation: toBool(get('oauth.enable_group_creation')),
-		allowedRoles: csv(text(get('oauth.allowed_roles'), 'user,admin') || 'user,admin'),
-		adminRoles: csv(text(get('oauth.admin_roles'), 'admin') || 'admin'),
-		blockedGroups: parseBlockedGroups(get('oauth.blocked_groups')),
-		updateNameOnLogin: toBool(get('oauth.update_name_on_login')),
-		updateEmailOnLogin: toBool(get('oauth.update_email_on_login')),
-		updatePictureOnLogin: toBool(get('oauth.update_picture_on_login'))
+		enableRoleManagement: bool('oauth.enable_role_management', env.ENABLE_OAUTH_ROLE_MANAGEMENT),
+		enableGroupManagement: bool('oauth.enable_group_management', env.ENABLE_OAUTH_GROUP_MANAGEMENT),
+		enableGroupCreation: bool('oauth.enable_group_creation', env.ENABLE_OAUTH_GROUP_CREATION),
+		allowedRoles: csv(
+			str('oauth.allowed_roles', env.OAUTH_ALLOWED_ROLES, 'user,admin') || 'user,admin'
+		),
+		adminRoles: csv(str('oauth.admin_roles', env.OAUTH_ADMIN_ROLES, 'admin') || 'admin'),
+		blockedGroups: parseBlockedGroups(written('oauth.blocked_groups') ?? env.OAUTH_BLOCKED_GROUPS),
+		updateNameOnLogin: bool('oauth.update_name_on_login', env.OAUTH_UPDATE_NAME_ON_LOGIN),
+		updateEmailOnLogin: bool('oauth.update_email_on_login', env.OAUTH_UPDATE_EMAIL_ON_LOGIN),
+		updatePictureOnLogin: bool('oauth.update_picture_on_login', env.OAUTH_UPDATE_PICTURE_ON_LOGIN)
 	};
 }
 
@@ -163,6 +178,41 @@ function parseBlockedGroups(value: unknown): string[] {
 		/* fall through to a comma-separated list */
 	}
 	return csv(raw);
+}
+
+/**
+ * The admin Authentication screen's payload, derived from the same resolution
+ * the runtime uses — so what the screen shows is what sign-in will do.
+ */
+export function oauthConfigPayload(settings: OAuthSettings): Record<string, unknown> {
+	return {
+		ENABLE_OAUTH: settings.enable,
+		OAUTH_PROVIDER_NAME: settings.providerName,
+		OAUTH_CLIENT_ID: settings.clientId,
+		OAUTH_CLIENT_SECRET: settings.clientSecret,
+		OPENID_PROVIDER_URL: settings.openidProviderUrl,
+		OPENID_REDIRECT_URI: settings.openidRedirectUri,
+		OAUTH_SCOPES: settings.scopes,
+		OAUTH_EMAIL_CLAIM: settings.emailClaim,
+		OAUTH_USERNAME_CLAIM: settings.usernameClaim,
+		OAUTH_PICTURE_CLAIM: settings.pictureClaim,
+		OAUTH_SUB_CLAIM: settings.subClaim,
+		OAUTH_GROUP_CLAIM: settings.groupClaim,
+		OAUTH_ROLES_CLAIM: settings.rolesClaim,
+		ENABLE_OAUTH_SIGNUP: settings.enableSignup,
+		OAUTH_MERGE_ACCOUNTS_BY_EMAIL: settings.mergeAccountsByEmail,
+		OAUTH_AUTO_REDIRECT: settings.autoRedirect,
+		OAUTH_ALLOWED_DOMAINS: settings.allowedDomains.join(','),
+		ENABLE_OAUTH_ROLE_MANAGEMENT: settings.enableRoleManagement,
+		ENABLE_OAUTH_GROUP_MANAGEMENT: settings.enableGroupManagement,
+		ENABLE_OAUTH_GROUP_CREATION: settings.enableGroupCreation,
+		OAUTH_ALLOWED_ROLES: settings.allowedRoles.join(','),
+		OAUTH_ADMIN_ROLES: settings.adminRoles.join(','),
+		OAUTH_BLOCKED_GROUPS: JSON.stringify(settings.blockedGroups),
+		OAUTH_UPDATE_NAME_ON_LOGIN: settings.updateNameOnLogin,
+		OAUTH_UPDATE_EMAIL_ON_LOGIN: settings.updateEmailOnLogin,
+		OAUTH_UPDATE_PICTURE_ON_LOGIN: settings.updatePictureOnLogin
+	};
 }
 
 /**

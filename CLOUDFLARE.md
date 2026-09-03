@@ -269,15 +269,25 @@ management map the `roles`/`groups` claims onto Open WebUI roles and groups.
 The first account created on a fresh deployment is the administrator, however
 it signs up.
 
-**Trying it locally.** A mock identity provider ships with the port:
+Every setting also has a Worker var, matching upstream's environment
+variables — `OAUTH_CLIENT_ID`, `OPENID_PROVIDER_URL`, `ENABLE_OAUTH_SIGNUP`,
+`OAUTH_ALLOWED_DOMAINS` and the rest — so a deployment can be configured
+entirely with `wrangler secret put`. The precedence is stored value → Worker
+var → default, so the admin screen takes over the moment someone saves it.
+
+**Trying it locally.** A mock identity provider ships with the port, and the
+start script wires it up for you:
 
 ```bash
-npm --prefix workers run mock:oidc     # http://localhost:9500
+./start-workers.sh --mock --sso        # Windows: start-workers.bat --mock --sso
 ```
 
-Then set Provider URL `http://localhost:9500/.well-known/openid-configuration`,
-client `open-webui`, secret `open-webui-secret`, and turn on OAuth signup. The
-smoke test picks the mock IdP up automatically and runs the full round trip.
+The login page then shows **Continue with Mock IdP**, which signs you in as
+`sso.user@example.com` without asking for anything. To drive it by hand instead,
+run `npm --prefix workers run mock:oidc` and point the admin screen at
+`http://localhost:9500/.well-known/openid-configuration` with client
+`open-webui` and secret `open-webui-secret`. The smoke test picks the mock IdP
+up automatically and runs the full round trip.
 
 ---
 

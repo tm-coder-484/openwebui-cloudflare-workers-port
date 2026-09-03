@@ -3,6 +3,7 @@ REM Open WebUI on Cloudflare Workers - local development in one command (Windows
 REM
 REM   start-workers.bat            build the UI (if needed) and run wrangler dev
 REM   start-workers.bat --mock     ...and start a mock model server, so no API key is needed
+REM   start-workers.bat --sso      ...and start a mock identity provider, to try OIDC sign-in
 REM   start-workers.bat --rebuild  force a fresh frontend build
 REM
 REM Then open http://localhost:8787 - the first account you create becomes the admin.
@@ -11,12 +12,14 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 set MOCK=0
+set SSO=0
 set REBUILD=0
 set PORT=8787
 
 :parse
 if "%~1"=="" goto parsed
 if /i "%~1"=="--mock" set MOCK=1
+if /i "%~1"=="--sso" set SSO=1
 if /i "%~1"=="--rebuild" set REBUILD=1
 shift
 goto parse
@@ -68,6 +71,20 @@ if "%MOCK%"=="1" (
 		>> workers\.dev.vars echo OPENAI_API_BASE_URL=http://127.0.0.1:11435/v1
 		>> workers\.dev.vars echo OPENAI_API_KEY=mock-key
 	)
+)
+
+if "%SSO%"=="1" (
+	echo ==^> Starting the mock identity provider on http://127.0.0.1:9500
+	start "open-webui mock idp" cmd /c node workers\scripts\mock-oidc.mjs
+	findstr /b /c:"OPENID_PROVIDER_URL=" workers\.dev.vars >nul 2>nul
+	if errorlevel 1 (
+		>> workers\.dev.vars echo OAUTH_CLIENT_ID=open-webui
+		>> workers\.dev.vars echo OAUTH_CLIENT_SECRET=open-webui-secret
+		>> workers\.dev.vars echo OPENID_PROVIDER_URL=http://127.0.0.1:9500/.well-known/openid-configuration
+		>> workers\.dev.vars echo OAUTH_PROVIDER_NAME=Mock IdP
+		>> workers\.dev.vars echo ENABLE_OAUTH_SIGNUP=true
+	)
+	echo     The login page will show "Continue with Mock IdP".
 )
 
 echo ==^> Starting wrangler dev on http://localhost:%PORT%

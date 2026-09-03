@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { adminUser, verifiedUser } from '../lib/auth';
 import { getConfigMany, getUserPermissions } from '../lib/config';
-import { oauthProviders, providerButtons } from '../lib/oauth';
+import { oauthProviders, oauthSettings, providerButtons } from '../lib/oauth';
 import { hasUsers } from '../lib/users';
 import { WEBUI_VERSION } from '../lib/version';
 import { getAllModels, getBaseModels, filterModelsForUser } from '../lib/models';
@@ -42,8 +42,6 @@ app.get('/api/changelog', (c) => c.json({}));
 app.get('/api/config', async (c) => {
 	const user = c.get('user');
 	const config = await getConfigMany(c.env, [
-		'oauth.enable',
-		'oauth.auto_redirect',
 		'ldap.enable',
 		'ui.enable_signup',
 		'ui.enable_login_form',
@@ -103,6 +101,7 @@ app.get('/api/config', async (c) => {
 			: null);
 
 	const onboarding = user ? false : !(await hasUsers(c.env));
+	const oauth = await oauthSettings(c.env);
 
 	const base: Record<string, unknown> = {
 		...(onboarding ? { onboarding: true } : {}),
@@ -111,8 +110,8 @@ app.get('/api/config', async (c) => {
 		version: WEBUI_VERSION,
 		default_locale: '',
 		oauth: {
-			providers: providerButtons(await oauthProviders(c.env)),
-			auto_redirect: config['oauth.auto_redirect'] ?? false
+			providers: providerButtons(await oauthProviders(c.env, oauth)),
+			auto_redirect: oauth.autoRedirect
 		},
 		features: {
 			auth: true,

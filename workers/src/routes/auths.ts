@@ -12,7 +12,13 @@ import {
 	hashPassword,
 	verifyPassword
 } from '../lib/crypto';
-import { OAUTH_CONFIG_KEYS, oauthProviders, providerButtons } from '../lib/oauth';
+import {
+	OAUTH_CONFIG_KEYS,
+	oauthConfigPayload,
+	oauthProviders,
+	oauthSettings,
+	providerButtons
+} from '../lib/oauth';
 import { resolvePermissions } from '../lib/permissions';
 import { getUserByEmail, hasUsers, insertUser, serializeUser, updateUser } from '../lib/users';
 import { bad, forbidden, notFound, now, parseDuration, uuid, validateEmail } from '../lib/util';
@@ -359,14 +365,14 @@ app.post('/admin/config/oauth', async (c) => {
 });
 
 async function oauthConfigValues(env: Env): Promise<Record<string, unknown>> {
-	const config = await getConfigMany(env, Object.values(OAUTH_CONFIG_KEYS));
-	const out: Record<string, unknown> = {};
-	for (const [field, key] of Object.entries(OAUTH_CONFIG_KEYS)) out[field] = config[key] ?? '';
-	// The screen enables its fields on this flag; the port stores every value in
-	// D1, so the config is always editable.
-	out.ENABLE_OAUTH_PERSISTENT_CONFIG = true;
-	out.OAUTH_PROVIDERS = providerButtons(await oauthProviders(env));
-	return out;
+	const settings = await oauthSettings(env);
+	return {
+		...oauthConfigPayload(settings),
+		// The screen enables its fields on this flag; the port stores every value
+		// in D1, so the config is always editable.
+		ENABLE_OAUTH_PERSISTENT_CONFIG: true,
+		OAUTH_PROVIDERS: providerButtons(await oauthProviders(env, settings))
+	};
 }
 app.post('/ldap', async () => {
 	throw bad('LDAP authentication is not available in the Cloudflare Workers build.');
