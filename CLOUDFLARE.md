@@ -100,12 +100,21 @@ Node 22, so `npm ci` fails outright on a newer build image. If your build errors
 with an `EBADENGINE`/unsupported-engine message, set a `NODE_VERSION` build
 variable to `22`.
 
-If the build runs out of memory, add a build variable
-`NODE_OPTIONS` = `--max-old-space-size=4096` (6144 if that is not enough). The
-SvelteKit frontend is large: measured locally it peaks around 5.6 GB of RSS.
-`build:workers` already passes `--sourcemap false`, which is worth 1.6 GB and
-20 seconds over a plain `vite build` — the maps would only be discarded by
-`.assetsignore` on upload anyway, so do not re-enable them for this build.
+The frontend build is memory-hungry, and `build:workers` already accounts for
+it: it raises Node's heap to 4 GB and passes `--sourcemap false`. Measured on
+this repo, the build needs between 3.5 and 4 GB of JS heap — 3584 MB still dies
+with `Ineffective mark-compacts near heap limit`, 4096 MB succeeds — and the
+sourcemaps it no longer generates were worth another 1.6 GB and 20 seconds for
+output `.assetsignore` discards on upload. Do not re-enable them for this build.
+
+Cloudflare's builder defaults Node to a 2 GB heap, which is not enough, so a
+build there fails without those two settings. If it still fails **after** them,
+read the error rather than raising the number: `Ineffective mark-compacts` is
+V8 and a larger heap may help, but `Killed` or exit 137 is the kernel, meaning
+the container itself is too small and no flag will fix it. In that case build
+somewhere with more memory — a GitHub Actions runner, or your own machine with
+`npm run build:workers && npm --prefix workers run deploy` — and let Cloudflare
+serve the result.
 
 **4. Deploy.** The first build takes a few minutes — most of it is the frontend.
 
