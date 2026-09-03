@@ -12,6 +12,7 @@ import {
 	hashPassword,
 	verifyPassword
 } from '../lib/crypto';
+import { OAUTH_CONFIG_KEYS, oauthProviders, providerButtons } from '../lib/oauth';
 import { resolvePermissions } from '../lib/permissions';
 import { getUserByEmail, hasUsers, insertUser, serializeUser, updateUser } from '../lib/users';
 import { bad, forbidden, notFound, now, parseDuration, uuid, validateEmail } from '../lib/util';
@@ -323,8 +324,8 @@ async function adminConfigValues(env: Env): Promise<Record<string, unknown>> {
 	return out;
 }
 
-// LDAP and OAuth are not implemented in the Workers port; the admin screens
-// still fetch these, so return inert-but-well-formed payloads.
+// LDAP is not implemented in the Workers port; the admin screen still fetches
+// these, so return inert-but-well-formed payloads.
 app.get('/admin/config/ldap', async (c) => {
 	adminUser(c);
 	return c.json({ ENABLE_LDAP: false });
@@ -343,12 +344,30 @@ app.post('/admin/config/ldap/server', async (c) => {
 });
 app.get('/admin/config/oauth', async (c) => {
 	adminUser(c);
-	return c.json({ ENABLE_OAUTH: false, OAUTH_PROVIDERS: {} });
+	return c.json(await oauthConfigValues(c.env));
 });
+
 app.post('/admin/config/oauth', async (c) => {
 	adminUser(c);
-	return c.json({ ENABLE_OAUTH: false, OAUTH_PROVIDERS: {} });
+	const body = (await c.req.json()) as Record<string, unknown>;
+	const updates: Record<string, unknown> = {};
+	for (const [field, key] of Object.entries(OAUTH_CONFIG_KEYS)) {
+		if (field in body) updates[key] = body[field];
+	}
+	await setConfigMany(c.env, updates);
+	return c.json(await oauthConfigValues(c.env));
 });
+
+async function oauthConfigValues(env: Env): Promise<Record<string, unknown>> {
+	const config = await getConfigMany(env, Object.values(OAUTH_CONFIG_KEYS));
+	const out: Record<string, unknown> = {};
+	for (const [field, key] of Object.entries(OAUTH_CONFIG_KEYS)) out[field] = config[key] ?? '';
+	// The screen enables its fields on this flag; the port stores every value in
+	// D1, so the config is always editable.
+	out.ENABLE_OAUTH_PERSISTENT_CONFIG = true;
+	out.OAUTH_PROVIDERS = providerButtons(await oauthProviders(env));
+	return out;
+}
 app.post('/ldap', async () => {
 	throw bad('LDAP authentication is not available in the Cloudflare Workers build.');
 });

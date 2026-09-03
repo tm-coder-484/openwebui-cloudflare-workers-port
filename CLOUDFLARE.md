@@ -234,13 +234,59 @@ results, reports progress through the same `status` events as upstream, injects
 the pages as `<source>` context, and stores them as files so the answer carries
 citations.
 
+### OAuth / OIDC sign-in
+
+Four providers ship: `google`, `microsoft`, `github`, and a generic `oidc`
+client for anything else (Keycloak, Authentik, Auth0, Okta, Entra ID…). The
+login screen renders a button for each configured provider automatically.
+
+The generic client is configurable in **Admin Settings → Authentication**, so a
+deployed Worker needs no redeploy to turn SSO on:
+
+| Field         | Value                                                          |
+| ------------- | -------------------------------------------------------------- |
+| Provider URL  | your IdP's `.well-known/openid-configuration`                  |
+| Client ID     | the client you registered                                      |
+| Client Secret | its secret                                                     |
+| Redirect URI  | leave blank to use `https://<your-worker>/oauth/oidc/callback` |
+
+Register that callback URL with the IdP. The named providers are environment
+variables instead, matching upstream: `GOOGLE_CLIENT_ID`/`_SECRET`,
+`MICROSOFT_CLIENT_ID`/`_SECRET`/`_TENANT_ID`, `GITHUB_CLIENT_ID`/`_SECRET`.
+Their callbacks are `/oauth/<provider>/callback`.
+
+The flow is authorization-code with PKCE (S256). Because a Worker has no
+server-side session store, the `state`, the PKCE verifier and the OIDC `nonce`
+travel in a short-lived HMAC-signed, HttpOnly cookie instead — so the callback
+works whichever colo handles it. ID tokens are verified against the provider's
+JWKS (RS256/RS384/RS512, ES256/ES384) with `iss`, `aud`, `exp` and `nonce`
+checked; discovery documents and JWKS are cached in KV for an hour.
+
+Account handling mirrors upstream: `ENABLE_OAUTH_SIGNUP` gates account
+creation, `OAUTH_MERGE_ACCOUNTS_BY_EMAIL` links an SSO identity to an existing
+address, `OAUTH_ALLOWED_DOMAINS` restricts by email domain, and role and group
+management map the `roles`/`groups` claims onto Open WebUI roles and groups.
+The first account created on a fresh deployment is the administrator, however
+it signs up.
+
+**Trying it locally.** A mock identity provider ships with the port:
+
+```bash
+npm --prefix workers run mock:oidc     # http://localhost:9500
+```
+
+Then set Provider URL `http://localhost:9500/.well-known/openid-configuration`,
+client `open-webui`, secret `open-webui-secret`, and turn on OAuth signup. The
+smoke test picks the mock IdP up automatically and runs the full round trip.
+
 ---
 
 ## What works, and what does not
 
 **Working**
 
-- Email/password auth, API keys, JWT sessions, pending-user approval flow
+- Email/password auth, OAuth/OIDC single sign-on (Google, Microsoft, GitHub,
+  or any OpenID provider), API keys, JWT sessions, pending-user approval flow
 - Users, groups, and the full permission matrix
 - Chats: create, edit, delete, folders, tags, pin, archive, share, clone, fork
 - Streaming completions from NVIDIA NIM (primary), any OpenAI-compatible
@@ -267,9 +313,8 @@ citations.
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | Python tools, functions, pipes, filters, pipelines | The Workers runtime has no Python interpreter. Rows are stored and listed but never executed; `/api/config` reports `enable_plugins: false`. |
 | Server-side code execution (Jupyter)               | Same. The in-browser Pyodide interpreter still works.                                                                                        |
-| LDAP, OAuth/OIDC, SCIM                             | Not ported. Email/password and API keys cover self-hosting; the admin screens return inert config.                                           |
+| LDAP, SCIM                                         | Not ported. Email/password, API keys and OAuth/OIDC cover self-hosting; the LDAP admin screen returns inert config.                          |
 | Ollama on `localhost`                              | A deployed Worker cannot reach private addresses — expose Ollama over HTTPS (e.g. Cloudflare Tunnel) and set its URL.                        |
-| Web search providers                               | The wiring exists but no provider is implemented; URL ingestion (`#https://…`) does work.                                                    |
 | Socket.IO long-polling                             | Only the WebSocket transport is implemented; `/api/config` always reports `enable_websocket: true`.                                          |
 | Server-side Yjs merge                              | Note collaboration relays updates between clients instead of merging them server-side.                                                       |
 | Server-side PDF export, `black` formatting         | Both need Python/native binaries.                                                                                                            |

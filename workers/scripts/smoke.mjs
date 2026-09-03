@@ -418,6 +418,111 @@ if (isAdmin) {
 		const summary = await api('/api/v1/analytics/summary');
 		assert(typeof summary.total_messages === 'number', 'no analytics');
 	});
+	await check('read and write the OAuth admin config', async () => {
+		const before = await api('/api/v1/auths/admin/config/oauth');
+		assert('ENABLE_OAUTH' in before, 'no OAuth config');
+		assert(before.ENABLE_OAUTH_PERSISTENT_CONFIG === true, 'OAuth config is not editable');
+		await api('/api/v1/auths/admin/config/oauth', {
+			method: 'POST',
+			body: JSON.stringify({ OAUTH_PROVIDER_NAME: 'Smoke SSO' })
+		});
+		const after = await api('/api/v1/auths/admin/config/oauth');
+		assert(after.OAUTH_PROVIDER_NAME === 'Smoke SSO', 'OAuth config did not persist');
+		await api('/api/v1/auths/admin/config/oauth', {
+			method: 'POST',
+			body: JSON.stringify({ OAUTH_PROVIDER_NAME: before.OAUTH_PROVIDER_NAME || 'SSO' })
+		});
+	});
+
+	// Full sign-in round trip, only when a mock IdP is running:
+	//   node scripts/mock-oidc.mjs &   (see CLOUDFLARE.md)
+	const idp = process.env.SMOKE_OIDC_URL ?? 'http://127.0.0.1:9500';
+	const discovery = `${idp.replace(/\/+$/, '')}/.well-known/openid-configuration`;
+	const idpUp = await fetch(discovery)
+		.then((response) => response.ok)
+		.catch(() => false);
+
+	if (idpUp) {
+		const before = await api('/api/v1/auths/admin/config/oauth');
+		try {
+			await check('sign in through an OIDC provider end to end', async () => {
+				await api('/api/v1/auths/admin/config/oauth', {
+					method: 'POST',
+					body: JSON.stringify({
+						ENABLE_OAUTH: true,
+						OAUTH_PROVIDER_NAME: 'Smoke IdP',
+						OAUTH_CLIENT_ID: process.env.SMOKE_OIDC_CLIENT_ID ?? 'open-webui',
+						OAUTH_CLIENT_SECRET: process.env.SMOKE_OIDC_CLIENT_SECRET ?? 'open-webui-secret',
+						OPENID_PROVIDER_URL: discovery,
+						ENABLE_OAUTH_SIGNUP: true
+					})
+				});
+
+				const config = await api('/api/config');
+				assert(config.oauth?.providers?.oidc === 'Smoke IdP', 'the provider is not advertised');
+
+				// Follow login -> IdP -> callback by hand so the flow cookie and the
+				// `state` parameter are carried exactly as a browser would.
+				const login = await fetch(`${BASE}/oauth/oidc/login`, { redirect: 'manual' });
+				assert(login.status === 302, `login did not redirect (${login.status})`);
+				const flowCookie = (login.headers.get('set-cookie') ?? '').split(';')[0];
+				assert(flowCookie.startsWith('oauth_flow='), 'no flow cookie was set');
+
+				const authorize = await fetch(login.headers.get('location'), { redirect: 'manual' });
+				assert(authorize.status === 302, 'the IdP did not redirect back');
+
+				const callback = await fetch(authorize.headers.get('location'), {
+					redirect: 'manual',
+					headers: { Cookie: flowCookie }
+				});
+				assert(callback.status === 302, `the callback did not redirect (${callback.status})`);
+				const location = callback.headers.get('location') ?? '';
+				assert(!location.includes('error='), `sign-in failed: ${decodeURIComponent(location)}`);
+
+				const sessionCookie = (callback.headers.get('set-cookie') ?? '')
+					.split(/,\s*(?=[A-Za-z_]+=)/)
+					.find((entry) => entry.startsWith('token='));
+				assert(sessionCookie, 'no session cookie was issued');
+				const sessionToken = sessionCookie.split(';')[0].slice('token='.length);
+
+				const session = await fetch(`${BASE}/api/v1/auths/`, {
+					headers: { Authorization: `Bearer ${sessionToken}` }
+				}).then((response) => response.json());
+				assert(session.email, `the session token does not resolve: ${JSON.stringify(session)}`);
+			});
+
+			await check('reject an OAuth callback whose state does not match', async () => {
+				const login = await fetch(`${BASE}/oauth/oidc/login`, { redirect: 'manual' });
+				const flowCookie = (login.headers.get('set-cookie') ?? '').split(';')[0];
+				const authorize = await fetch(login.headers.get('location'), { redirect: 'manual' });
+				const tampered = (authorize.headers.get('location') ?? '').replace(
+					/state=[^&]*/,
+					'state=tampered'
+				);
+				const callback = await fetch(tampered, {
+					redirect: 'manual',
+					headers: { Cookie: flowCookie }
+				});
+				assert(
+					(callback.headers.get('location') ?? '').includes('error='),
+					'a mismatched state was accepted'
+				);
+			});
+		} finally {
+			const restore = {};
+			for (const [field, value] of Object.entries(before)) {
+				if (field !== 'OAUTH_PROVIDERS' && field !== 'ENABLE_OAUTH_PERSISTENT_CONFIG') {
+					restore[field] = value;
+				}
+			}
+			await api('/api/v1/auths/admin/config/oauth', {
+				method: 'POST',
+				body: JSON.stringify(restore)
+			});
+		}
+	} else {
+		console.log('  · OIDC sign-in skipped (no mock IdP on ' + idp + ')');
+	}
 }
 
 // --- Cleanup --------------------------------------------------------------

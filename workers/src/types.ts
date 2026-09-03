@@ -40,6 +40,28 @@ export interface Env {
 	WEB_SEARCH_URL?: string;
 	RAG_EMBEDDING_MODEL?: string;
 	TASK_MODEL?: string;
+
+	// OAuth / OIDC. The generic `oidc` client is also editable in Admin
+	// Settings; the named providers are env-only, matching upstream.
+	ENABLE_OAUTH?: string;
+	OAUTH_CLIENT_ID?: string;
+	OAUTH_CLIENT_SECRET?: string;
+	OPENID_PROVIDER_URL?: string;
+	OPENID_REDIRECT_URI?: string;
+	GOOGLE_CLIENT_ID?: string;
+	GOOGLE_CLIENT_SECRET?: string;
+	GOOGLE_OAUTH_SCOPE?: string;
+	GOOGLE_REDIRECT_URI?: string;
+	MICROSOFT_CLIENT_ID?: string;
+	MICROSOFT_CLIENT_SECRET?: string;
+	MICROSOFT_CLIENT_TENANT_ID?: string;
+	MICROSOFT_CLIENT_LOGIN_BASE_URL?: string;
+	MICROSOFT_OAUTH_SCOPE?: string;
+	MICROSOFT_REDIRECT_URI?: string;
+	GITHUB_CLIENT_ID?: string;
+	GITHUB_CLIENT_SECRET?: string;
+	GITHUB_CLIENT_SCOPE?: string;
+	GITHUB_CLIENT_REDIRECT_URI?: string;
 }
 
 export interface SessionUser {

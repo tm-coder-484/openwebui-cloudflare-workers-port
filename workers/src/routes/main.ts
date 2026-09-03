@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { adminUser, verifiedUser } from '../lib/auth';
 import { getConfigMany, getUserPermissions } from '../lib/config';
+import { oauthProviders, providerButtons } from '../lib/oauth';
 import { hasUsers } from '../lib/users';
 import { WEBUI_VERSION } from '../lib/version';
 import { getAllModels, getBaseModels, filterModelsForUser } from '../lib/models';
@@ -110,7 +111,7 @@ app.get('/api/config', async (c) => {
 		version: WEBUI_VERSION,
 		default_locale: '',
 		oauth: {
-			providers: {},
+			providers: providerButtons(await oauthProviders(c.env)),
 			auto_redirect: config['oauth.auto_redirect'] ?? false
 		},
 		features: {

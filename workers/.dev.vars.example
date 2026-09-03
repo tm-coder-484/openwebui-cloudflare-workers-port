@@ -17,3 +17,24 @@ WEBUI_SECRET_KEY=change-me
 # Local mock model server (`node workers/scripts/mock-openai.mjs`):
 # OPENAI_API_BASE_URL=http://127.0.0.1:11435/v1
 # OPENAI_API_KEY=mock-key
+
+# ── OAuth / OIDC sign-in ──────────────────────────────────────────────────
+# The generic OIDC client is also editable in Admin Settings → Authentication;
+# anything set here is the default until an admin saves that screen.
+# OAUTH_CLIENT_ID=open-webui
+# OAUTH_CLIENT_SECRET=...
+# OPENID_PROVIDER_URL=https://idp.example.com/.well-known/openid-configuration
+
+# Local mock identity provider (`node workers/scripts/mock-oidc.mjs`):
+# OAUTH_CLIENT_ID=open-webui
+# OAUTH_CLIENT_SECRET=open-webui-secret
+# OPENID_PROVIDER_URL=http://127.0.0.1:9500/.well-known/openid-configuration
+
+# The named providers are env-only, matching upstream.
+# GOOGLE_CLIENT_ID=
+# GOOGLE_CLIENT_SECRET=
+# MICROSOFT_CLIENT_ID=
+# MICROSOFT_CLIENT_SECRET=
+# MICROSOFT_CLIENT_TENANT_ID=
+# GITHUB_CLIENT_ID=
+# GITHUB_CLIENT_SECRET=

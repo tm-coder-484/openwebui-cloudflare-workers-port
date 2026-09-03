@@ -44,6 +44,7 @@ import images from './routes/images';
 import skills from './routes/skills';
 import terminals from './routes/terminals';
 import socket from './routes/socket';
+import oauth from './routes/oauth';
 
 export { SocketHub } from './socket/hub';
 
@@ -94,6 +95,7 @@ app.route('/api/v1/utils', utils);
 app.route('/api/v1/retrieval', retrieval);
 app.route('/api/v1/audio', audio);
 app.route('/api/v1/images', images);
+app.route('/oauth', oauth);
 app.route('/openai', openai);
 app.route('/ollama', ollama);
 app.route('/', main);
@@ -123,6 +125,7 @@ app.notFound(async (c) => {
 	const path = new URL(c.req.url).pathname;
 	if (
 		path.startsWith('/api/') ||
+		path.startsWith('/oauth') ||
 		path.startsWith('/openai') ||
 		path.startsWith('/ollama') ||
 		path.startsWith('/ws')
