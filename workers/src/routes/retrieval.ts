@@ -22,6 +22,16 @@ const RAG_KEYS: Record<string, string> = {
 	RAG_EMBEDDING_MODEL: 'rag.embedding_model',
 	FILE_MAX_SIZE: 'rag.file.max_size',
 	FILE_MAX_COUNT: 'rag.file.max_count',
+	ENABLE_WEB_SEARCH: 'web.search.enable'
+};
+
+/**
+ * Web settings live under a `web` object in the response, not alongside the RAG
+ * ones. The admin screen does `webConfig = res.web` and dereferences it
+ * immediately, so a flat payload leaves it undefined and the whole Web Search
+ * tab fails to mount rather than degrading.
+ */
+const WEB_KEYS: Record<string, string> = {
 	ENABLE_WEB_SEARCH: 'web.search.enable',
 	WEB_SEARCH_ENGINE: 'web.search.engine',
 	WEB_SEARCH_API_KEY: 'web.search.api_key',
@@ -30,13 +40,35 @@ const RAG_KEYS: Record<string, string> = {
 	WEB_SEARCH_URL: 'web.search.url',
 	SEARXNG_QUERY_URL: 'web.search.url',
 	WEB_SEARCH_RESULT_COUNT: 'web.search.result_count',
-	WEB_LOADER_ENGINE: 'web.loader.engine'
+	WEB_LOADER_ENGINE: 'web.loader.engine',
+	WEB_SEARCH_DOMAIN_FILTER_LIST: 'web.search.domain_filter_list',
+	YOUTUBE_LOADER_LANGUAGE: 'web.loader.youtube_language',
+	BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: 'web.search.bypass_embedding',
+	BYPASS_WEB_SEARCH_WEB_LOADER: 'web.search.bypass_loader',
+	ENABLE_WEB_LOADER_SSL_VERIFICATION: 'web.loader.ssl_verification',
+	ENABLE_WEB_SEARCH_CONFIRMATION: 'web.search.confirmation.enable',
+	WEB_SEARCH_CONCURRENT_REQUESTS: 'web.search.concurrent_requests'
 };
 
 const readConfig = async (c: any) => {
-	const config = await getConfigMany(c.env, Object.values(RAG_KEYS));
+	const config = await getConfigMany(c.env, [
+		...Object.values(RAG_KEYS),
+		...Object.values(WEB_KEYS)
+	]);
 	const out: Record<string, unknown> = {};
 	for (const [field, key] of Object.entries(RAG_KEYS)) out[field] = config[key] ?? null;
+
+	const web: Record<string, unknown> = {};
+	for (const [field, key] of Object.entries(WEB_KEYS)) web[field] = config[key] ?? null;
+	// The screen calls .join(',') on these two when they are arrays and expects a
+	// string otherwise; null would render as "null" in the input.
+	web.WEB_SEARCH_DOMAIN_FILTER_LIST = web.WEB_SEARCH_DOMAIN_FILTER_LIST ?? '';
+	web.YOUTUBE_LOADER_LANGUAGE = web.YOUTUBE_LOADER_LANGUAGE ?? '';
+
+	out.web = web;
+	// Kept flat as well: other callers (and this port's own smoke test) read the
+	// web fields from the top level.
+	for (const [field, value] of Object.entries(web)) if (!(field in out)) out[field] = value;
 	return out;
 };
 
@@ -48,9 +80,19 @@ app.get('/config', async (c) => {
 app.post('/config/update', async (c) => {
 	adminUser(c);
 	const body = (await c.req.json()) as Record<string, unknown>;
+	// The screen posts web settings back under `web`; accept either shape so a
+	// flat client keeps working.
+	const web = (body.web ?? {}) as Record<string, unknown>;
 	const updates: Record<string, unknown> = {};
 	for (const [field, key] of Object.entries(RAG_KEYS))
 		if (field in body) updates[key] = body[field];
+	for (const [field, key] of Object.entries(WEB_KEYS)) {
+		const value = field in web ? web[field] : field in body ? body[field] : undefined;
+		if (value === undefined) continue;
+		// Arrays come back from the two list fields; store them as the strings the
+		// screen expects to read next time.
+		updates[key] = Array.isArray(value) ? value.join(',') : value;
+	}
 	await setConfigMany(c.env, updates);
 	return c.json(await readConfig(c));
 });
