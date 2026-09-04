@@ -86,6 +86,8 @@ export interface UpstreamRequest {
 	headers?: Record<string, string>;
 	model: string;
 	payload: Record<string, unknown>;
+	/** Keys to retry with when the chosen one is rate-limited (Ollama Cloud). */
+	fallbackKeys?: string[];
 }
 
 /** Normalizes the frontend body into a provider-ready request. */
@@ -157,7 +159,8 @@ export function buildUpstreamRequest(
 			...(connection.config?.headers ?? {})
 		},
 		model: resolved.upstreamId,
-		payload
+		payload,
+		...(connection.fallbackKeys?.length ? { fallbackKeys: connection.fallbackKeys } : {})
 	};
 }
 
@@ -724,6 +727,35 @@ async function runWebSearch(env: Env, job: CompletionJob, emit: EventEmitter): P
 	}
 }
 
+/**
+ * Sends the request, moving to another key if the first is rate-limited.
+ *
+ * Ollama Cloud limits each key separately, which is the whole reason for
+ * configuring more than one. A 429 (or a 5xx, which the service also returns
+ * under load) is retried with the next key rather than surfaced; anything else
+ * is returned untouched, since a bad request will fail the same way on every
+ * key.
+ */
+async function fetchWithKeyFallback(request: UpstreamRequest): Promise<Response> {
+	const send = (key?: string) =>
+		fetch(request.url!, {
+			method: 'POST',
+			headers: key
+				? { ...request.headers, Authorization: `Bearer ${key}` }
+				: (request.headers as Record<string, string>),
+			body: JSON.stringify(request.payload)
+		});
+
+	let response = await send();
+	for (const key of request.fallbackKeys ?? []) {
+		if (response.status !== 429 && response.status < 500) break;
+		// The body has to be consumed or the connection is held open.
+		await response.body?.cancel().catch(() => {});
+		response = await send(key);
+	}
+	return response;
+}
+
 async function* streamUpstream(
 	env: Env,
 	request: UpstreamRequest
@@ -745,11 +777,7 @@ async function* streamUpstream(
 		)) as unknown as ReadableStream<Uint8Array>;
 		body = result;
 	} else {
-		const response = await fetch(request.url!, {
-			method: 'POST',
-			headers: request.headers,
-			body: JSON.stringify(request.payload)
-		});
+		const response = await fetchWithKeyFallback(request);
 		if (!response.ok) throw new HttpError(response.status, await errorDetail(response));
 		body = response.body;
 	}

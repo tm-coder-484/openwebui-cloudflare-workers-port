@@ -224,6 +224,9 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'openai.api_keys': [],
 	'openai.api_configs': {},
 	'ollama.enable': false,
+	// Ollama Cloud speaks the OpenAI API at /v1; several keys can be pooled.
+	'ollama.base_url': 'https://ollama.com/v1',
+	'ollama.api_keys': [],
 	'ollama.base_urls': [],
 	'ollama.api_configs': {},
 	'workers_ai.enable': true,

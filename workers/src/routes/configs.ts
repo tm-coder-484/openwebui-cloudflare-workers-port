@@ -22,6 +22,9 @@ const CONNECTIONS_KEYS: Record<string, string> = {
 	ENABLE_OLLAMA_API: 'ollama.enable',
 	OLLAMA_BASE_URLS: 'ollama.base_urls',
 	OLLAMA_API_CONFIGS: 'ollama.api_configs',
+	// Ollama Cloud: one base URL, a pool of keys.
+	OLLAMA_BASE_URL: 'ollama.base_url',
+	OLLAMA_API_KEYS: 'ollama.api_keys',
 	ENABLE_WORKERS_AI: 'workers_ai.enable',
 	WORKERS_AI_MODELS: 'workers_ai.models'
 };

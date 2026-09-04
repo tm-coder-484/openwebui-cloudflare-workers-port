@@ -38,3 +38,9 @@ WEBUI_SECRET_KEY=change-me
 # MICROSOFT_CLIENT_TENANT_ID=
 # GITHUB_CLIENT_ID=
 # GITHUB_CLIENT_SECRET=
+
+# ── Ollama Cloud ──────────────────────────────────────────────────────────
+# ollama.com speaks the OpenAI API at /v1. Several keys can be pooled: one is
+# picked per request and the others are tried if it is rate-limited.
+# OLLAMA_API_KEYS=key-one,key-two,key-three
+# OLLAMA_BASE_URL=https://ollama.com/v1
