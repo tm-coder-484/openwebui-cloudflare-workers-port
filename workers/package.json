@@ -12,6 +12,7 @@
 		"smoke": "node scripts/smoke.mjs",
 		"mock": "node scripts/mock-openai.mjs",
 		"mock:oidc": "node scripts/mock-oidc.mjs",
+		"mock:search": "node scripts/mock-search.mjs",
 		"db:local": "wrangler d1 migrations apply open-webui --local",
 		"db:remote": "wrangler d1 migrations apply open-webui --remote"
 	},

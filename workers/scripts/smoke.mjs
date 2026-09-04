@@ -208,6 +208,95 @@ if (isAdmin || session.permissions?.workspace?.knowledge) {
 	});
 }
 
+// --- Web search -----------------------------------------------------------
+// Needs `node scripts/mock-search.mjs` running; skipped otherwise so the smoke
+// test still passes against a deployment with no local mock.
+const SEARCH_MOCK = process.env.SMOKE_SEARCH_URL ?? 'http://127.0.0.1:9600';
+const searchMockUp = await fetch(`${SEARCH_MOCK}/search?q=ping&format=json`)
+	.then((response) => response.ok)
+	.catch(() => false);
+
+if (isAdmin && searchMockUp) {
+	console.log('\nweb search');
+	await check('save the web search settings and read them back', async () => {
+		const saved = await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({
+				web: {
+					ENABLE_WEB_SEARCH: true,
+					WEB_SEARCH_ENGINE: 'searxng',
+					SEARXNG_QUERY_URL: SEARCH_MOCK,
+					SEARXNG_LANGUAGE: 'en',
+					// Not used by the searxng engine — checked because the field used
+					// to be dropped on save and came back blank on the next reload.
+					OLLAMA_CLOUD_WEB_SEARCH_API_KEY: 'smoke-ollama-key',
+					WEB_SEARCH_RESULT_COUNT: 2
+				}
+			})
+		});
+		assert(saved.web, 'the response has no `web` object for the admin screen to read');
+		assert(saved.web.WEB_SEARCH_ENGINE === 'searxng', 'engine not saved');
+		assert(saved.web.SEARXNG_QUERY_URL === SEARCH_MOCK, 'searxng URL not saved');
+		assert(
+			saved.web.OLLAMA_CLOUD_WEB_SEARCH_API_KEY === 'smoke-ollama-key',
+			'the Ollama Cloud key was dropped on save'
+		);
+
+		const reloaded = await api('/api/v1/retrieval/config');
+		assert(reloaded.web.SEARXNG_LANGUAGE === 'en', 'searxng language did not persist');
+		assert(
+			reloaded.web.OLLAMA_CLOUD_WEB_SEARCH_API_KEY === 'smoke-ollama-key',
+			'the Ollama Cloud key did not persist'
+		);
+
+		// These inputs are marked `required` on the screen and are rendered for
+		// every engine, so a null leaves the browser refusing to submit the form
+		// — nothing on the whole tab can be saved, with no error to explain it.
+		for (const field of [
+			'WEB_SEARCH_RESULT_COUNT',
+			'WEB_SEARCH_CONCURRENT_REQUESTS',
+			'WEB_LOADER_CONCURRENT_REQUESTS'
+		]) {
+			assert(
+				reloaded.web[field] !== null && reloaded.web[field] !== undefined,
+				`${field} is required by the screen but the backend returned nothing, which blocks Save`
+			);
+		}
+	});
+
+	await check('search the web and load the result pages', async () => {
+		const result = await api('/api/v1/retrieval/process/web/search', {
+			method: 'POST',
+			body: JSON.stringify({ query: 'cloudflare workers' })
+		});
+		const docs = result.docs ?? result.documents ?? [];
+		assert(docs.length > 0, 'no search results came back');
+		const text = JSON.stringify(docs);
+		assert(text.includes('V8 isolates'), 'the result pages were not loaded into text');
+		assert(!text.includes('console.log'), 'page scripts leaked into the extracted text');
+	});
+
+	await check('report an unimplemented engine instead of searching another one', async () => {
+		await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({ web: { WEB_SEARCH_ENGINE: 'kagi' } })
+		});
+		const failed = await api('/api/v1/retrieval/process/web/search', {
+			method: 'POST',
+			body: JSON.stringify({ query: 'anything' })
+		}).then(
+			() => null,
+			(error) => error.message
+		);
+		assert(failed && /not implemented/i.test(failed), `expected a clear refusal, got: ${failed}`);
+		// Leave the deployment on a working engine.
+		await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({ web: { WEB_SEARCH_ENGINE: 'searxng' } })
+		});
+	});
+}
+
 // --- Notes and memories ---------------------------------------------------
 console.log('\nnotes & memories');
 await check('create and update a note', async () => {

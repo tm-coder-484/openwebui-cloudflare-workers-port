@@ -769,7 +769,20 @@ async function runWebSearch(env: Env, job: CompletionJob, emit: EventEmitter): P
 	await status({ description: `Searching the web for "${query.slice(0, 80)}"`, done: false });
 
 	try {
-		const results = await webSearch(env, query);
+		// Every generated query is searched and the pages merged, as upstream
+		// does: one query missing the mark no longer means an empty answer.
+		const seen = new Set<string>();
+		const results: Awaited<ReturnType<typeof webSearch>> = [];
+		for (const term of queries) {
+			for (const result of await webSearch(env, term)) {
+				if (seen.has(result.url)) continue;
+				seen.add(result.url);
+				results.push(result);
+			}
+			// The first query is the one the model considered most relevant, so a
+			// hit there is usually enough; the rest only run when it came up short.
+			if (results.length >= 3) break;
+		}
 		if (!results.length) {
 			await status({ description: 'No web results found', done: true });
 			return;
@@ -778,7 +791,7 @@ async function runWebSearch(env: Env, job: CompletionJob, emit: EventEmitter): P
 		const parts: string[] = [];
 		const sources: Record<string, unknown>[] = [];
 		for (const [index, result] of results.entries()) {
-			const text = (await fetchPageText(result.url)) || result.snippet;
+			const text = (await fetchPageText(result.url, 6000, env)) || result.snippet;
 			if (!text) continue;
 			parts.push(
 				`<source id="${index + 1}" name="${result.title || result.url}" url="${result.url}">${text}</source>`

@@ -9,6 +9,7 @@
 
 import type { Env } from '../types';
 import { getConfigMany } from './config';
+import { ollamaKeys } from './models';
 import { HttpError } from './util';
 
 export interface SearchResult {
@@ -76,18 +77,140 @@ async function duckduckgo(query: string, count: number): Promise<SearchResult[]>
 	return results;
 }
 
-async function searxng(baseUrl: string, query: string, count: number): Promise<SearchResult[]> {
-	const url = new URL(`${baseUrl.replace(/\/+$/, '')}/search`);
-	url.searchParams.set('q', query);
-	url.searchParams.set('format', 'json');
-	const response = await fetch(url.toString(), { signal: AbortSignal.timeout(15_000) });
-	if (!response.ok) throw new HttpError(502, `SearXNG responded ${response.status}`);
-	const payload = (await response.json()) as { results?: any[] };
-	return (payload.results ?? []).slice(0, count).map((item) => ({
-		title: item.title ?? item.url,
-		url: item.url,
-		snippet: item.content ?? ''
-	}));
+/**
+ * SearXNG — a metasearch engine you run yourself.
+ *
+ * Two things make it fail in ways the bare status code does not explain, so
+ * both are handled here:
+ *
+ *  - `format: json` is *not* in a stock instance's `search.formats`. An
+ *    instance that only serves HTML answers the same URL with 403, which
+ *    otherwise reads as "wrong key" on an engine that has no key.
+ *  - Public instances rate-limit hard, and Workers egress from shared
+ *    Cloudflare IPs, so one instance is a single point of failure. A list is
+ *    accepted and tried in order.
+ */
+async function searxng(
+	baseUrls: string[],
+	query: string,
+	count: number,
+	language: string
+): Promise<SearchResult[]> {
+	const failures: string[] = [];
+
+	for (const base of baseUrls) {
+		// A URL already pointing at /search (upstream's "Searxng Query URL",
+		// often written `http://host:8080/search?q=<query>`) is kept as-is.
+		const trimmed = base.replace(/\/+$/, '');
+		const url = new URL(
+			/\/search$/.test(new URL(trimmed).pathname) ? trimmed : `${trimmed}/search`
+		);
+		url.searchParams.set('q', query);
+		url.searchParams.set('format', 'json');
+		if (language && language !== 'all') url.searchParams.set('language', language);
+
+		try {
+			const response = await fetch(url.toString(), {
+				headers: { Accept: 'application/json' },
+				signal: AbortSignal.timeout(15_000)
+			});
+			if (!response.ok) {
+				failures.push(
+					response.status === 403
+						? `${url.host} refused the JSON API (403) — add "json" to \`search.formats\` in its settings.yml`
+						: `${url.host} responded ${response.status}`
+				);
+				continue;
+			}
+			// An HTML-only instance can answer 200 with a page rather than JSON.
+			const body = await response.text();
+			let payload: { results?: any[] };
+			try {
+				payload = JSON.parse(body);
+			} catch {
+				failures.push(`${url.host} returned HTML, not JSON — its \`search.formats\` omits "json"`);
+				continue;
+			}
+			const results = (payload.results ?? []).slice(0, count).map((item: any) => ({
+				title: item.title ?? item.url,
+				url: item.url,
+				snippet: item.content ?? ''
+			}));
+			if (results.length) return results;
+			failures.push(`${url.host} returned no results`);
+		} catch (error) {
+			failures.push(`${url.host}: ${(error as Error).message}`);
+		}
+	}
+
+	throw new HttpError(502, `SearXNG search failed. ${failures.join('; ')}`);
+}
+
+/**
+ * Ollama's hosted web search — `POST /api/web_search` on ollama.com.
+ *
+ * This is the one engine on this deployment that needs no extra account: the
+ * same API key that runs the models runs the search. Keys are tried in turn so
+ * a pool of them survives the per-key rate limit, exactly as chat completions
+ * already do.
+ */
+async function ollamaCloud(keys: string[], query: string, count: number): Promise<SearchResult[]> {
+	let lastError = '';
+
+	for (const key of keys) {
+		const response = await fetch('https://ollama.com/api/web_search', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+			// max_results is capped at 10 by the API; asking for more is rejected.
+			body: JSON.stringify({ query, max_results: Math.min(Math.max(count, 1), 10) }),
+			signal: AbortSignal.timeout(20_000)
+		});
+
+		if (response.ok) {
+			const payload = (await response.json()) as { results?: any[] };
+			return (payload.results ?? []).slice(0, count).map((item: any) => ({
+				title: item.title ?? item.url,
+				url: item.url,
+				snippet: item.content ?? ''
+			}));
+		}
+
+		lastError = `${response.status} ${(await response.text().catch(() => '')).slice(0, 200)}`;
+		// 401/403 is a bad key and 429 is that key's rate limit: both are worth
+		// retrying with the next key. Anything else is the service itself.
+		if (![401, 403, 429].includes(response.status)) break;
+	}
+
+	throw new HttpError(502, `Ollama web search failed (${lastError || 'no API key accepted'}).`);
+}
+
+/**
+ * Ollama's page loader — `POST /api/web_fetch`.
+ *
+ * Worth preferring over a direct fetch: a Worker requesting a page arrives from
+ * a shared Cloudflare IP with no browser fingerprint, and a good share of sites
+ * answer that with a 403 or a bot-check page. Ollama fetches server-side and
+ * returns text that is already stripped of markup.
+ */
+async function ollamaFetchPage(keys: string[], target: string): Promise<string> {
+	for (const key of keys) {
+		try {
+			const response = await fetch('https://ollama.com/api/web_fetch', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+				body: JSON.stringify({ url: target }),
+				signal: AbortSignal.timeout(20_000)
+			});
+			if (response.ok) {
+				const payload = (await response.json()) as { content?: string };
+				return String(payload.content ?? '');
+			}
+			if (![401, 403, 429].includes(response.status)) return '';
+		} catch {
+			// Try the next key, then fall back to fetching the page directly.
+		}
+	}
+	return '';
 }
 
 async function tavily(key: string, query: string, count: number): Promise<SearchResult[]> {
@@ -184,6 +307,7 @@ async function googlePse(
 
 /** The engines this port actually implements, as opposed to the thirty the admin screen offers. */
 export const IMPLEMENTED_ENGINES = [
+	'ollama_cloud',
 	'duckduckgo',
 	'searxng',
 	'google_pse',
@@ -191,6 +315,35 @@ export const IMPLEMENTED_ENGINES = [
 	'serper',
 	'brave'
 ];
+
+/** Splits a newline/comma separated list, so several SearXNG instances can be pasted in. */
+const listOf = (value: unknown): string[] =>
+	(Array.isArray(value) ? value.map(String) : String(value ?? '').split(/[\n,]/))
+		.map((entry) => entry.trim())
+		.filter(Boolean);
+
+/**
+ * The keys `ollama_cloud` search may use: the dedicated admin field first, then
+ * the pool that already drives chat completions. Reusing the pool is the point
+ * — a deployment with fifteen Ollama keys in Connections gets working search
+ * without entering a sixteenth anywhere.
+ */
+async function ollamaSearchKeys(env: Env): Promise<string[]> {
+	const config = await getConfigMany(env, [
+		'web.search.ollama_cloud.api_key',
+		'ollama.api_keys',
+		'ollama.base_urls',
+		'ollama.api_configs'
+	]);
+	const dedicated = listOf(config['web.search.ollama_cloud.api_key']);
+	const pooled = ollamaKeys(env, config['ollama.api_keys']);
+	// Connections adds one host per key, so the keys live under api_configs.
+	const configs = (config['ollama.api_configs'] as Record<string, any>) ?? {};
+	const fromConnections = Object.values(configs)
+		.map((entry: any) => String(entry?.key ?? ''))
+		.filter(Boolean);
+	return [...new Set([...dedicated, ...pooled, ...fromConnections])];
+}
 
 export async function webSearch(
 	env: Env,
@@ -203,7 +356,8 @@ export async function webSearch(
 		'web.search.url',
 		'web.search.result_count',
 		'web.search.google_pse.api_key',
-		'web.search.google_pse.engine_id'
+		'web.search.google_pse.engine_id',
+		'web.search.searxng.language'
 	]);
 	const engine = String(config['web.search.engine'] ?? 'duckduckgo').toLowerCase();
 	const key = String(config['web.search.api_key'] ?? '') || env.WEB_SEARCH_API_KEY || '';
@@ -222,9 +376,36 @@ export async function webSearch(
 	};
 
 	switch (engine) {
-		case 'searxng':
-			if (!url) throw new HttpError(400, 'SearXNG needs a base URL (web.search.url).');
-			return searxng(url, query, count);
+		case 'ollama_cloud': {
+			const keys = await ollamaSearchKeys(env);
+			if (!keys.length) {
+				throw new HttpError(
+					400,
+					'Ollama web search needs an Ollama API key. Paste one under Admin Settings → ' +
+						'Web Search, or add an ollama.com connection under Admin Settings → Connections ' +
+						'and its key is reused here.'
+				);
+			}
+			return ollamaCloud(keys, query, count);
+		}
+		case 'searxng': {
+			const instances = listOf(url);
+			if (!instances.length) {
+				throw new HttpError(
+					400,
+					'SearXNG needs the URL of an instance you can reach — it is software you host, ' +
+						'not a hosted API. Set "Searxng Query URL" under Admin Settings → Web Search ' +
+						'(several may be given, comma separated), and make sure the instance has ' +
+						'"json" in its `search.formats`.'
+				);
+			}
+			return searxng(
+				instances,
+				query,
+				count,
+				String(config['web.search.searxng.language'] ?? '').trim()
+			);
+		}
 		case 'tavily':
 			return tavily(needsKey('Tavily'), query, count);
 		case 'serper':
@@ -262,8 +443,23 @@ export async function webSearch(
 	}
 }
 
-/** Fetches a result page and reduces it to plain text for the model. */
-export async function fetchPageText(url: string, maxChars = 6000): Promise<string> {
+/**
+ * Fetches a page and reduces it to plain text for the model.
+ *
+ * With `env` supplied and an Ollama key configured, the page is loaded through
+ * Ollama's `/api/web_fetch` first. A direct fetch from a Worker is refused by a
+ * large share of sites — shared egress IP, no browser fingerprint — and an
+ * empty page is why a search that found results can still answer with nothing.
+ * The direct fetch stays as the fallback so no key is required.
+ */
+export async function fetchPageText(url: string, maxChars = 6000, env?: Env): Promise<string> {
+	if (env) {
+		const keys = await ollamaSearchKeys(env).catch(() => []);
+		if (keys.length) {
+			const text = await ollamaFetchPage(keys, url);
+			if (text) return text.slice(0, maxChars);
+		}
+	}
 	try {
 		const response = await fetch(url, {
 			headers: { 'User-Agent': 'Mozilla/5.0 (compatible; OpenWebUI-Workers/1.0)' },
