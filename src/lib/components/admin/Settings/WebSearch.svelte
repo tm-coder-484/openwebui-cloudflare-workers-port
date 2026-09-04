@@ -230,9 +230,18 @@
 
 								<div class="flex w-full">
 									<div class="flex-1">
+										<!--
+											Optional, unlike every other engine's key field: left empty,
+											the backend falls back to the Ollama keys already configured
+											under Connections. SensitiveInput marks itself required by
+											default, which made the form refuse to submit and put the
+											documented "leave it blank to reuse your keys" flow out of
+											reach.
+										-->
 										<SensitiveInput
 											variant="settings"
-											placeholder={$i18n.t('Enter Ollama Cloud API Key')}
+											required={false}
+											placeholder={$i18n.t('Reuse the keys from Connections, or enter one')}
 											bind:value={webConfig.OLLAMA_CLOUD_WEB_SEARCH_API_KEY}
 										/>
 									</div>
