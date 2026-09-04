@@ -139,6 +139,49 @@ async function brave(key: string, query: string, count: number): Promise<SearchR
 	}));
 }
 
+/**
+ * Google Programmable Search Engine.
+ *
+ * Needs two values rather than one: an API key and the search engine id (the
+ * `cx`), which is what scopes the search. `num` is capped at 10 per request by
+ * the API, so a larger result count is clamped rather than silently ignored.
+ */
+async function googlePse(
+	key: string,
+	engineId: string,
+	query: string,
+	count: number
+): Promise<SearchResult[]> {
+	const url = new URL('https://www.googleapis.com/customsearch/v1');
+	url.searchParams.set('key', key);
+	url.searchParams.set('cx', engineId);
+	url.searchParams.set('q', query);
+	url.searchParams.set('num', String(Math.min(Math.max(count, 1), 10)));
+
+	const response = await fetch(url.toString(), {
+		headers: { Accept: 'application/json' },
+		signal: AbortSignal.timeout(20_000)
+	});
+	if (!response.ok) {
+		// Google puts the useful part in the body; a bare status hides whether
+		// it is a bad key, a bad cx, or the daily quota.
+		const detail = await response
+			.json()
+			.then((body: any) => body?.error?.message)
+			.catch(() => null);
+		throw new HttpError(
+			502,
+			`Google PSE responded ${response.status}${detail ? `: ${detail}` : ''}`
+		);
+	}
+	const payload = (await response.json()) as { items?: any[] };
+	return (payload.items ?? []).slice(0, count).map((item) => ({
+		title: item.title ?? item.link,
+		url: item.link,
+		snippet: item.snippet ?? ''
+	}));
+}
+
 export async function webSearch(
 	env: Env,
 	query: string,
@@ -148,7 +191,9 @@ export async function webSearch(
 		'web.search.engine',
 		'web.search.api_key',
 		'web.search.url',
-		'web.search.result_count'
+		'web.search.result_count',
+		'web.search.google_pse.api_key',
+		'web.search.google_pse.engine_id'
 	]);
 	const engine = String(config['web.search.engine'] ?? 'duckduckgo').toLowerCase();
 	const key = String(config['web.search.api_key'] ?? '') || env.WEB_SEARCH_API_KEY || '';
@@ -176,6 +221,20 @@ export async function webSearch(
 			return serper(needsKey('Serper'), query, count);
 		case 'brave':
 			return brave(needsKey('Brave'), query, count);
+		case 'google_pse': {
+			// Its own key/engine pair, so switching engines does not require
+			// retyping the shared WEB_SEARCH_API_KEY field.
+			const pseKey = String(config['web.search.google_pse.api_key'] ?? '') || key;
+			const engineId = String(config['web.search.google_pse.engine_id'] ?? '');
+			if (!pseKey || !engineId) {
+				throw new HttpError(
+					400,
+					'Google PSE needs both an API key and a search engine ID. Set them ' +
+						'under Admin Settings → Web Search.'
+				);
+			}
+			return googlePse(pseKey, engineId, query, count);
+		}
 		case 'duckduckgo':
 		default:
 			return duckduckgo(query, count);

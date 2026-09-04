@@ -146,6 +146,8 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'web.search.enable': false,
 	'web.search.engine': 'duckduckgo',
 	'web.search.api_key': '',
+	'web.search.google_pse.api_key': '',
+	'web.search.google_pse.engine_id': '',
 	'web.search.url': '',
 	'web.search.result_count': 3,
 	'web.search.concurrent_requests': 5,
