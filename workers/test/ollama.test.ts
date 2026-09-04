@@ -91,3 +91,57 @@ describe('ollamaConnection', () => {
 		).toBeNull();
 	});
 });
+
+describe('keys entered through the Connections screen', () => {
+	// The screen has no pool field: it appends a base URL and stores that
+	// connection's key at the matching index in api_configs. Adding the same
+	// host repeatedly is how several keys get entered.
+	const asScreenWouldSave = (urls: string[], keys: string[]) => ({
+		'ollama.enable': true,
+		'ollama.base_urls': urls,
+		'ollama.api_configs': Object.fromEntries(keys.map((key, i) => [String(i), { key }]))
+	});
+
+	it('pools the keys from repeated entries of the same host', async () => {
+		const connection = await ollamaConnection(
+			envWith(
+				asScreenWouldSave(
+					['https://ollama.com/v1', 'https://ollama.com/v1', 'https://ollama.com/v1'],
+					['a', 'b', 'c']
+				)
+			)
+		);
+		expect([connection!.key, ...connection!.fallbackKeys!].sort()).toEqual(['a', 'b', 'c']);
+	});
+
+	it('ignores keys belonging to a different host', async () => {
+		const connection = await ollamaConnection(
+			envWith(
+				asScreenWouldSave(
+					['https://ollama.com/v1', 'https://other.test/v1'],
+					['mine', 'someone-elses']
+				)
+			)
+		);
+		expect([connection!.key, ...connection!.fallbackKeys!]).toEqual(['mine']);
+	});
+
+	it('tolerates a trailing slash, which the screen does not always strip', async () => {
+		const connection = await ollamaConnection(
+			envWith(asScreenWouldSave(['https://ollama.com/v1/', 'https://ollama.com/v1'], ['a', 'b']))
+		);
+		expect([connection!.key, ...connection!.fallbackKeys!].sort()).toEqual(['a', 'b']);
+	});
+
+	it('combines screen keys with any set as a Worker var', async () => {
+		const connection = await ollamaConnection(
+			envWith(asScreenWouldSave(['https://ollama.com/v1'], ['from-screen']), {
+				OLLAMA_API_KEYS: 'from-var'
+			})
+		);
+		expect([connection!.key, ...connection!.fallbackKeys!].sort()).toEqual([
+			'from-screen',
+			'from-var'
+		]);
+	});
+});
