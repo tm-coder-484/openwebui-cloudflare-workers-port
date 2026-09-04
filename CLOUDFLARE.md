@@ -336,16 +336,31 @@ its past runs, linking back to the chats they produced.
 Enable it under **Admin Settings → Web Search**, or with the config API. Five
 providers ship, all over plain `fetch`:
 
-| `WEB_SEARCH_ENGINE`         | Needs                                                  |
-| --------------------------- | ------------------------------------------------------ |
-| `duckduckgo` (default)      | nothing — best-effort HTML scrape, can be rate-limited |
-| `searxng`                   | `WEB_SEARCH_URL` pointing at your instance             |
-| `tavily`, `serper`, `brave` | `WEB_SEARCH_API_KEY`                                   |
+| `WEB_SEARCH_ENGINE`         | Needs                                                          |
+| --------------------------- | -------------------------------------------------------------- |
+| `duckduckgo` (default)      | nothing — best-effort HTML scrape, can be rate-limited         |
+| `searxng`                   | `WEB_SEARCH_URL` pointing at your instance                     |
+| `tavily`, `serper`, `brave` | `WEB_SEARCH_API_KEY`                                           |
+| `google_pse`                | `GOOGLE_PSE_API_KEY` **and** `GOOGLE_PSE_ENGINE_ID` (the `cx`) |
+
+Google PSE keeps its key separate from `WEB_SEARCH_API_KEY` so switching
+engines does not mean retyping it. Create the engine at
+[programmablesearchengine.google.com](https://programmablesearchengine.google.com)
+— set it to search the entire web unless you want it scoped to specific sites —
+and take the key from the Custom Search JSON API in Google Cloud. The free
+quota is 100 queries a day. Google caps `num` at 10 per request, so a larger
+result count is clamped rather than silently ignored.
 
 When a chat turn has web search enabled, the Worker searches, fetches the top
 results, reports progress through the same `status` events as upstream, injects
 the pages as `<source>` context, and stores them as files so the answer carries
 citations.
+
+**Fetching one page.** Independently of search, `POST /api/v1/retrieval/process/web`
+with `{"url": "..."}` fetches a page, reduces it to text, stores it as a file
+and indexes it for retrieval — which is what typing `#https://example.com` in
+chat does. Same extraction as the search path, so a page pulled in this way is
+citable in exactly the same way.
 
 ### OAuth / OIDC sign-in
 

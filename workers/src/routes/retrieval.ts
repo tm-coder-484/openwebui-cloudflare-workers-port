@@ -25,6 +25,8 @@ const RAG_KEYS: Record<string, string> = {
 	ENABLE_WEB_SEARCH: 'web.search.enable',
 	WEB_SEARCH_ENGINE: 'web.search.engine',
 	WEB_SEARCH_API_KEY: 'web.search.api_key',
+	GOOGLE_PSE_API_KEY: 'web.search.google_pse.api_key',
+	GOOGLE_PSE_ENGINE_ID: 'web.search.google_pse.engine_id',
 	WEB_SEARCH_URL: 'web.search.url',
 	SEARXNG_QUERY_URL: 'web.search.url',
 	WEB_SEARCH_RESULT_COUNT: 'web.search.result_count',
