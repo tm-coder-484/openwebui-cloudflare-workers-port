@@ -369,6 +369,69 @@ A self-hosted Ollama needs no key at all — set `OLLAMA_BASE_URL` and leave the
 keys empty. Note that a deployed Worker cannot reach a private address, so it
 has to be exposed over HTTPS.
 
+### Setting up Ollama Cloud: models, search and fetch
+
+One key pool drives all three. Get keys from
+[ollama.com/settings/keys](https://ollama.com/settings/keys) (a free account is
+enough for search).
+
+**1. Put every key in one place.** In the Worker's **Settings** → **Variables
+and Secrets**, add a secret `OLLAMA_API_KEYS` holding all of them, comma or
+newline separated:
+
+```
+OLLAMA_API_KEYS = key-one,key-two,key-three
+```
+
+This one variable feeds the model connection _and_ web search — nothing else
+needs the keys typed again. Each request starts at a randomly chosen key with
+the rest behind it as fallbacks, so a pool of fifteen is fifteen times the
+per-key rate limit rather than one key doing all the work.
+
+**2. Turn the models on.** Admin Settings → **Connections** → enable **Ollama
+API**. This step is required: the Ollama connection is **off by default** and no
+environment variable turns it on, so keys alone give you no models. The base URL
+defaults to `https://ollama.com/v1`, which is Ollama's OpenAI-compatible
+endpoint — leave it alone unless you are pointing at your own server.
+
+**3. Turn web search on.** Admin Settings → **Web Search** → toggle **Web
+Search** on, set **Web Search Engine** to `ollama_cloud`, and **leave the Ollama
+Cloud API Key field blank** — it falls back to the pool from step 1. Fill it in
+only to give search its own keys. Then **Save**.
+
+Search does not go through the Connections toggle, so it works even with the
+Ollama model connection switched off — useful if you run models on NIM and want
+Ollama only for search.
+
+**4. Use it.** In a chat, click the web-search control in the composer before
+sending. The Worker turns the conversation into search queries, searches, and
+returns the pages as citable sources.
+
+Fetching a single page needs no setup: type `#https://example.com` in a chat, or
+`POST /api/v1/retrieval/process/web` with `{"url": "..."}`. Result pages inside
+a search are loaded automatically, through Ollama's fetch API when a key is
+available.
+
+**Doing it over the API instead of the screens** — both calls need an admin
+token in `Authorization: Bearer …`:
+
+```bash
+curl -X POST "$WEBUI/api/v1/configs/connections" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"ENABLE_OLLAMA_API":true,"OLLAMA_BASE_URL":"https://ollama.com/v1",
+       "OLLAMA_API_KEYS":["key-one","key-two"]}'
+
+curl -X POST "$WEBUI/api/v1/retrieval/config/update" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"web":{"ENABLE_WEB_SEARCH":true,"WEB_SEARCH_ENGINE":"ollama_cloud",
+              "WEB_SEARCH_RESULT_COUNT":3}}'
+```
+
+`OLLAMA_API_KEYS` set this way is stored in the database and takes the same path
+as the secret; use whichever you prefer. Adding the same host several times
+under Connections, once per key, also works and is pooled the same way — it is
+just far more clicking for fifteen keys.
+
 ### Web search
 
 Enable it under **Admin Settings → Web Search**, or with the config API. Seven
