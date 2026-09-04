@@ -276,6 +276,29 @@ if (isAdmin && searchMockUp) {
 		assert(!text.includes('console.log'), 'page scripts leaked into the extracted text');
 	});
 
+	await check('use the text the engine returned instead of loading the page again', async () => {
+		// Ollama's search returns whole pages, not snippets. Re-fetching those
+		// URLs costs a round trip each and, on Ollama, one more call against a
+		// rate-limited free tier, for text already in hand.
+		const before = await fetch(`${SEARCH_MOCK}/page-loads`).then((r) => r.json());
+		const result = await api('/api/v1/retrieval/process/web/search', {
+			method: 'POST',
+			body: JSON.stringify({ query: 'fulltext cloudflare workers' })
+		});
+		const after = await fetch(`${SEARCH_MOCK}/page-loads`).then((r) => r.json());
+
+		const docs = result.docs ?? [];
+		assert(docs.length > 0, 'no search results came back');
+		assert(
+			docs.every((doc) => doc.content.length > 500),
+			'the full page text from the engine did not reach the model'
+		);
+		assert(
+			after.pageLoads === before.pageLoads,
+			`the pages were fetched again anyway (${after.pageLoads - before.pageLoads} extra loads)`
+		);
+	});
+
 	await check('report an unimplemented engine instead of searching another one', async () => {
 		await api('/api/v1/retrieval/config/update', {
 			method: 'POST',
