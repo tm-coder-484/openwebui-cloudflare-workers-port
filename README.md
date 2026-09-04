@@ -21,7 +21,7 @@ Passionate about open-source AI? [Join our team →](https://careers.openwebui.c
 
 For more information, be sure to check out our [Open WebUI Documentation](https://docs.openwebui.com/).
 
-#### Trigger a cloudflare rebuild
+#### Trigger a cloudflare rebuild no. 2
 
 > [!IMPORTANT]
 > **This fork runs Open WebUI on Cloudflare Workers.** The Python backend in
