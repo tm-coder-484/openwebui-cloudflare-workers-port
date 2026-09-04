@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { htmlToText, webSearch } from '../src/lib/websearch';
+import { IMPLEMENTED_ENGINES, htmlToText, webSearch } from '../src/lib/websearch';
+import { parseQueries } from '../src/lib/completions';
 
 describe('htmlToText', () => {
 	it('strips markup, scripts and styles', () => {
@@ -87,5 +88,66 @@ describe('Google PSE', () => {
 				headers: { 'Content-Type': 'application/json' }
 			})) as any;
 		await expect(webSearch(envWith(), 'workers')).rejects.toThrow(/API key not valid/);
+	});
+});
+
+describe('unimplemented engines', () => {
+	const envWithEngine = (engine: string) =>
+		({
+			DB: {
+				prepare: () => ({
+					bind: () => ({ all: async () => ({ results: [] }) }),
+					all: async () => ({
+						results: [{ key: 'web.search.engine', value: JSON.stringify(engine) }]
+					})
+				})
+			}
+		}) as any;
+
+	it('says so instead of silently searching DuckDuckGo', async () => {
+		// The admin screen offers thirty engines; falling through made every
+		// unimplemented one look like it worked, with results from the wrong place.
+		await expect(webSearch(envWithEngine('ollama_cloud'), 'anything')).rejects.toThrow(
+			/not implemented/i
+		);
+	});
+
+	it('names the engines that do work', async () => {
+		await expect(webSearch(envWithEngine('yandex'), 'anything')).rejects.toThrow(/duckduckgo/);
+	});
+
+	it('still serves the engines it implements', () => {
+		expect(IMPLEMENTED_ENGINES).toContain('google_pse');
+		expect(IMPLEMENTED_ENGINES).toContain('duckduckgo');
+	});
+});
+
+describe('parseQueries', () => {
+	it('reads the JSON the prompt asks for', () => {
+		expect(parseQueries('{"queries":["cloudflare workers d1","workers kv limits"]}')).toEqual([
+			'cloudflare workers d1',
+			'workers kv limits'
+		]);
+	});
+
+	it('finds the JSON inside surrounding chatter', () => {
+		// Providers that ignore response_format wrap it in prose or a code fence.
+		expect(parseQueries('Sure!\n```json\n{"queries":["a query"]}\n```')).toEqual(['a query']);
+	});
+
+	it('falls back to a bare line when the model ignored the format entirely', () => {
+		expect(parseQueries('cloudflare workers pricing')).toEqual(['cloudflare workers pricing']);
+	});
+
+	it('strips list markers and quotes from a bare line', () => {
+		expect(parseQueries('1. "cloudflare workers pricing"')).toEqual(['cloudflare workers pricing']);
+	});
+
+	it('returns nothing for an explicitly empty list, so the caller can fall back', () => {
+		expect(parseQueries('{"queries":[]}')).toEqual([]);
+	});
+
+	it('rejects a line too long to be a search query', () => {
+		expect(parseQueries('x'.repeat(400))).toEqual([]);
 	});
 });

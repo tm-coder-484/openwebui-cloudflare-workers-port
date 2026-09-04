@@ -204,7 +204,10 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'task.tags.prompt_template': '',
 	'task.follow_up.enable': true,
 	'task.autocomplete.enable': false,
+	// Turns the conversation into real search queries instead of searching the
+	// raw message verbatim.
 	'task.query.enable': true,
+	'task.query.prompt_template': '',
 	'task.emoji.enable': false,
 	'task.model': null,
 	'task.model_external': null,

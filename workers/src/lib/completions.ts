@@ -654,10 +654,110 @@ async function recordTurn(
  * Searches the web for the current turn, appends the pages as sources, and
  * reports progress through the same status events the Python backend emits.
  */
+/**
+ * Turns the conversation into search queries, the way upstream does.
+ *
+ * Searching the raw message is close to useless once it is more than a
+ * sentence: paste three paragraphs and three paragraphs go to the search
+ * engine. The task model is asked for one to three real queries instead.
+ *
+ * JSON mode is deliberately not requested. Several providers — Ollama among
+ * them — accept `response_format` with a 200 and ignore it, so the reply is
+ * parsed defensively: the first JSON object in the text, else the first
+ * non-empty line, else the raw message.
+ */
+export async function generateSearchQueries(
+	env: Env,
+	messages: CompletionMessage[],
+	fallback: string,
+	answeringModelId: string
+): Promise<string[]> {
+	const config = await getConfigMany(env, ['task.query.enable', 'task.query.prompt_template']);
+	if (config['task.query.enable'] === false) return [fallback];
+
+	const model = await taskModelId(env, answeringModelId);
+	if (!model) return [fallback];
+
+	const history = messages
+		.slice(-6)
+		.map((message) => {
+			const text =
+				typeof message.content === 'string'
+					? message.content
+					: Array.isArray(message.content)
+						? (message.content as any[])
+								.map((part) => (typeof part?.text === 'string' ? part.text : ''))
+								.join(' ')
+						: '';
+			return `${message.role}: ${text}`;
+		})
+		.join('\n');
+	const template =
+		(config['task.query.prompt_template'] as string) || DEFAULT_QUERY_GENERATION_PROMPT;
+	const prompt = template
+		.replaceAll('{{CURRENT_DATE}}', new Date().toISOString().slice(0, 10))
+		.replaceAll('{{MESSAGES:END:6}}', history);
+
+	try {
+		const reply = await generateText(env, model, [{ role: 'user', content: prompt }], {
+			maxTokens: 200
+		});
+		const queries = parseQueries(reply);
+		return queries.length ? queries.slice(0, 3) : [fallback];
+	} catch (error) {
+		console.warn('[open-webui] search query generation failed, using the raw message', error);
+		return [fallback];
+	}
+}
+
+/** Pulls a query list out of a reply that may or may not be clean JSON. */
+export function parseQueries(reply: string): string[] {
+	const match = reply.match(/\{[\s\S]*\}/);
+	if (match) {
+		try {
+			const parsed = JSON.parse(match[0]);
+			if (Array.isArray(parsed?.queries)) {
+				return parsed.queries.map((q: unknown) => String(q).trim()).filter(Boolean);
+			}
+		} catch {
+			/* fall through to the line-based reading */
+		}
+	}
+	// A model that ignored the format at least tends to put the query on its
+	// own line; anything longer than a search query is not one.
+	const line = reply
+		.split('\n')
+		.map((entry) => entry.replace(/^[-*\d.\s"']+|["']+$/g, '').trim())
+		.find((entry) => entry.length > 0 && entry.length < 200);
+	return line ? [line] : [];
+}
+
+const DEFAULT_QUERY_GENERATION_PROMPT = `### Task:
+Analyze the chat history to determine the necessity of generating search queries, in the given language. By default, **prioritize generating 1-3 broad and relevant search queries** unless it is absolutely certain that no additional information is required. If no search is unequivocally needed, return an empty list.
+
+### Guidelines:
+- Respond **EXCLUSIVELY** with a JSON object. Any extra commentary is strictly prohibited.
+- Format: { "queries": ["query1", "query2"] }, each query distinct, concise and relevant.
+- Today's date is: {{CURRENT_DATE}}.
+
+### Output:
+Strictly return in JSON format:
+{
+  "queries": ["query1", "query2"]
+}
+
+### Chat History:
+<chat_history>
+{{MESSAGES:END:6}}
+</chat_history>`;
+
 async function runWebSearch(env: Env, job: CompletionJob, emit: EventEmitter): Promise<void> {
 	const messages = (job.body.messages ?? []) as CompletionMessage[];
-	const query = lastUserText(messages);
-	if (!query) return;
+	const raw = lastUserText(messages);
+	if (!raw) return;
+
+	const queries = await generateSearchQueries(env, messages, raw, job.modelId);
+	const query = queries[0];
 
 	const status = (data: Record<string, unknown>) =>
 		emit({

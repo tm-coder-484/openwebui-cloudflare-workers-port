@@ -74,6 +74,25 @@ createServer(async (req, res) => {
 			}
 		}
 		const body = await readBody(req);
+
+		// Answers a query-generation prompt the way a real task model would, so the
+		// web-search path can be exercised end to end.
+		if (JSON.stringify(body?.messages ?? []).includes('Strictly return in JSON format')) {
+			const reply = JSON.stringify({
+				id: 'q1',
+				object: 'chat.completion',
+				choices: [
+					{
+						index: 0,
+						message: { role: 'assistant', content: '{"queries":["d1 read replica latency"]}' },
+						finish_reason: 'stop'
+					}
+				]
+			});
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(reply);
+			return;
+		}
 		if (process.env.MOCK_OPENAI_DEBUG) {
 			console.log('[mock] request body:', JSON.stringify(body).slice(0, 800));
 		}

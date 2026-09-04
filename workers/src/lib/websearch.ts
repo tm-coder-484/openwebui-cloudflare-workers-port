@@ -182,6 +182,16 @@ async function googlePse(
 	}));
 }
 
+/** The engines this port actually implements, as opposed to the thirty the admin screen offers. */
+export const IMPLEMENTED_ENGINES = [
+	'duckduckgo',
+	'searxng',
+	'google_pse',
+	'tavily',
+	'serper',
+	'brave'
+];
+
 export async function webSearch(
 	env: Env,
 	query: string,
@@ -236,8 +246,19 @@ export async function webSearch(
 			return googlePse(pseKey, engineId, query, count);
 		}
 		case 'duckduckgo':
-		default:
 			return duckduckgo(query, count);
+		default:
+			// The admin screen lists thirty engines; six are implemented. Falling
+			// through to DuckDuckGo made every unimplemented one look like it
+			// worked — including ones with no API key set — which is worse than
+			// failing, because the results looked plausible and came from the
+			// wrong place.
+			throw new HttpError(
+				400,
+				`The "${engine}" web-search provider is not implemented in the ` +
+					'Cloudflare Workers port. Choose one of: ' +
+					`${IMPLEMENTED_ENGINES.join(', ')} — under Admin Settings → Web Search.`
+			);
 	}
 }
 
