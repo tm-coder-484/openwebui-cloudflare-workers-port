@@ -71,6 +71,20 @@ its own provider so it stays the primary option:
 The Worker builds and deploys straight from a GitHub repository, so a
 deployment needs nothing installed locally.
 
+**0. Enable R2 on your Cloudflare account.** Dashboard → **R2 Object
+Storage** → work through the enable screen. Unlike D1 and KV, R2 needs a
+one-time opt-in with a payment method on file before anything can create a
+bucket, so it is the one resource the deploy cannot provision for you. Skip
+this and the deploy fails at the very last step, after the whole frontend has
+built and every asset has uploaded, with:
+
+```
+✘ [ERROR] A request to the Cloudflare API (/accounts/…/r2/buckets/open-webui-files) failed.
+  Please enable R2 through the Cloudflare Dashboard. [code: 10042]
+```
+
+Thirty seconds here saves a full build cycle.
+
 **1. Get the code onto your own GitHub account.** Fork this repository, or push
 a clone to a new repo of your own. Cloudflare needs read access to it.
 
