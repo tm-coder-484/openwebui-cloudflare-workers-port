@@ -35,8 +35,23 @@ const PAGES = {
 	}
 };
 
+/**
+ * How many times the result pages were actually loaded.
+ *
+ * Ollama's search returns whole pages rather than snippets, so the Worker is
+ * meant to skip the loader entirely in that case. Counting the hits is the only
+ * way to prove it from outside.
+ */
+let pageLoads = 0;
+
 const server = createServer((request, response) => {
 	const url = new URL(request.url, ORIGIN);
+
+	if (url.pathname === '/page-loads') {
+		const body = JSON.stringify({ pageLoads });
+		response.writeHead(200, { 'Content-Type': 'application/json' });
+		return response.end(body);
+	}
 
 	if (url.pathname === '/search') {
 		// A stock instance serves HTML only and answers this with 403; this one
@@ -46,13 +61,16 @@ const server = createServer((request, response) => {
 			return response.end('Forbidden');
 		}
 		const query = url.searchParams.get('q') ?? '';
+		// A query containing "fulltext" makes this behave like Ollama's search,
+		// which returns the whole page in `content` instead of a teaser.
+		const wholePages = query.includes('fulltext');
 		const body = JSON.stringify({
 			query,
 			number_of_results: 2,
 			results: Object.entries(PAGES).map(([path, page]) => ({
 				url: `${ORIGIN}${path}`,
 				title: page.title,
-				content: `${page.body.slice(0, 60)}…`,
+				content: wholePages ? page.body.repeat(12) : `${page.body.slice(0, 60)}…`,
 				engine: 'mock'
 			}))
 		});
@@ -65,6 +83,7 @@ const server = createServer((request, response) => {
 
 	const page = PAGES[url.pathname];
 	if (page) {
+		pageLoads += 1;
 		const html = `<!doctype html><html><head><title>${page.title}</title>
 			<style>body{font-family:sans-serif}</style><script>console.log('ignored')</script></head>
 			<body><h1>${page.title}</h1><p>${page.body}</p></body></html>`;
@@ -82,4 +101,5 @@ const server = createServer((request, response) => {
 server.listen(PORT, '127.0.0.1', () => {
 	console.log(`[mock-search] searxng  ${ORIGIN}/search?q=test&format=json`);
 	console.log(`[mock-search] pages    ${Object.keys(PAGES).join(', ')}`);
+	console.log(`[mock-search] counter  ${ORIGIN}/page-loads`);
 });

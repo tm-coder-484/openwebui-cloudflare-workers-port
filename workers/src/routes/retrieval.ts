@@ -5,7 +5,7 @@ import type { AppContext } from '../types';
 import { adminUser, verifiedUser } from '../lib/auth';
 import { getConfigMany, setConfigMany } from '../lib/config';
 import { indexChunks, search } from '../lib/retrieval';
-import { fetchPageText, webSearch } from '../lib/websearch';
+import { fetchPageText, resultText, webSearch } from '../lib/websearch';
 import { sha256Hex } from '../lib/crypto';
 import { bad, now, toJSON, uuid } from '../lib/util';
 
@@ -277,7 +277,7 @@ app.post('/process/web/search', async (c) => {
 	const docs = [];
 	const files = [];
 	for (const result of results) {
-		const text = (await fetchPageText(result.url, 6000, c.env)) || result.snippet;
+		const text = await resultText(c.env, result);
 		if (!text) continue;
 
 		const id = uuid();
