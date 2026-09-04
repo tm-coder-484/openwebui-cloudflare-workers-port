@@ -58,6 +58,11 @@ createServer(async (req, res) => {
 	}
 
 	if (url.pathname.endsWith('/chat/completions')) {
+		// Rate-limits one nominated key, so key failover can be exercised.
+		if ((req.headers.authorization ?? '').includes('rate-limited-key')) {
+			res.writeHead(429, { 'Content-Type': 'application/json' });
+			return res.end(JSON.stringify({ error: { message: 'rate limit exceeded' } }));
+		}
 		const body = await readBody(req);
 		if (process.env.MOCK_OPENAI_DEBUG) {
 			console.log('[mock] request body:', JSON.stringify(body).slice(0, 800));

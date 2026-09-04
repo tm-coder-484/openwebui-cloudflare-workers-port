@@ -331,6 +331,37 @@ query plus in-memory expansion. Alongside the user's own calendars, a read-only
 **Scheduled Tasks** calendar shows each automation's upcoming occurrences and
 its past runs, linking back to the chats they produced.
 
+### Ollama Cloud
+
+`ollama.com` serves the OpenAI API at `/v1`, so it is wired in as an
+OpenAI-compatible connection rather than through the native Ollama protocol —
+listing, streaming and routing all reuse the same path as every other provider.
+Its models are tagged **Ollama** in the picker.
+
+Configure it under **Admin Settings → Connections**, or with Worker vars:
+
+| Setting             | Meaning                                                        |
+| ------------------- | -------------------------------------------------------------- |
+| `ENABLE_OLLAMA_API` | on/off                                                         |
+| `OLLAMA_BASE_URL`   | defaults to `https://ollama.com/v1`; point it at your own host |
+| `OLLAMA_API_KEYS`   | one key, or many — an array, or a comma/newline separated list |
+
+**More than one key is the point.** Ollama Cloud rate-limits each key
+separately, so the Worker picks one at random per request to spread load and
+keeps the rest as fallbacks: a `429` (or a `5xx`, which the service also
+returns under load) is retried with the next key rather than surfaced. Paste
+fifteen keys in and you get roughly fifteen times the headroom, with no change
+to how anything else behaves. Duplicates are dropped, since a repeated key adds
+no headroom but would skew the random choice toward itself.
+
+The choice is random rather than round-robin because a Worker keeps no state
+between requests, and a KV counter would cost a write per message against a
+free tier that allows a thousand a day.
+
+A self-hosted Ollama needs no key at all — set `OLLAMA_BASE_URL` and leave the
+keys empty. Note that a deployed Worker cannot reach a private address, so it
+has to be exposed over HTTPS.
+
 ### Web search
 
 Enable it under **Admin Settings → Web Search**, or with the config API. Five

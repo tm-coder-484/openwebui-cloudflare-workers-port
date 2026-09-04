@@ -48,7 +48,9 @@ export interface OpenAIConnection {
 	idx: number;
 	config: Record<string, any>;
 	/** Marks the NVIDIA NIM connection so its models can be labelled and ranked. */
-	provider?: 'nvidia' | 'openai';
+	provider?: 'nvidia' | 'openai' | 'ollama';
+	/** Ollama Cloud accepts several keys; the rest are tried if one is rate-limited. */
+	fallbackKeys?: string[];
 }
 
 /** Curated NIM catalogue used when the endpoint cannot be listed (self-hosted
@@ -142,6 +144,55 @@ export async function nvidiaConnection(env: Env): Promise<OpenAIConnection | nul
 	};
 }
 
+/**
+ * Ollama Cloud, as an OpenAI-compatible connection.
+ *
+ * ollama.com serves the OpenAI API at /v1, so it reuses the whole existing
+ * path — listing, streaming, routing — rather than the native Ollama protocol.
+ *
+ * Several keys can be configured. Each has its own rate limit, so one is chosen
+ * at random per request to spread load, and the others are kept as fallbacks
+ * for a 429. Random rather than round-robin because a Worker holds no state
+ * between requests, and a KV counter would cost a write per message against a
+ * free tier that allows a thousand a day.
+ */
+export async function ollamaConnection(env: Env): Promise<OpenAIConnection | null> {
+	const config = await getConfigMany(env, ['ollama.enable', 'ollama.base_url', 'ollama.api_keys']);
+	if (config['ollama.enable'] === false) return null;
+
+	const url = String(config['ollama.base_url'] ?? '').replace(/\/+$/, '') || OLLAMA_CLOUD_URL;
+	const keys = ollamaKeys(env, config['ollama.api_keys']);
+	// A self-hosted Ollama needs no key; the hosted service does.
+	if (!keys.length && url.includes('ollama.com')) return null;
+
+	const chosen = keys.length ? Math.floor(Math.random() * keys.length) : -1;
+	return {
+		url,
+		key: chosen >= 0 ? keys[chosen] : '',
+		idx: -2,
+		provider: 'ollama',
+		config: {},
+		fallbackKeys: keys.filter((_, index) => index !== chosen)
+	};
+}
+
+export const OLLAMA_CLOUD_URL = 'https://ollama.com/v1';
+
+/** Accepts an array, or a newline/comma separated list, so 15 keys can be pasted in. */
+export function ollamaKeys(env: Env, stored: unknown): string[] {
+	const raw = Array.isArray(stored)
+		? stored.map((key) => String(key))
+		: String(stored ?? '')
+				.split(/[\n,]/)
+				.map((key: string) => key.trim());
+	const fromEnv = (env.OLLAMA_API_KEYS ?? env.OLLAMA_API_KEY ?? '')
+		.split(/[\n,]/)
+		.map((key: string) => key.trim());
+	// Deduplicated: pasting the same key twice would skew the random choice
+	// toward it without adding any extra rate-limit headroom.
+	return [...new Set([...raw, ...fromEnv].filter(Boolean))];
+}
+
 export async function openaiConnections(env: Env): Promise<OpenAIConnection[]> {
 	const config = await getConfigMany(env, [
 		'openai.enable',
@@ -166,8 +217,9 @@ export async function openaiConnections(env: Env): Promise<OpenAIConnection[]> {
 
 async function fetchOpenAIModels(connection: OpenAIConnection): Promise<ModelEntry[]> {
 	const isNvidia = connection.provider === 'nvidia';
-	const ownedBy = isNvidia ? 'nvidia' : 'openai';
-	const tags = isNvidia ? [{ name: 'NVIDIA NIM' }] : [];
+	const isOllama = connection.provider === 'ollama';
+	const ownedBy = isNvidia ? 'nvidia' : isOllama ? 'ollama' : 'openai';
+	const tags = isNvidia ? [{ name: 'NVIDIA NIM' }] : isOllama ? [{ name: 'Ollama' }] : [];
 
 	// An explicit model_ids list skips the network round-trip entirely.
 	const manualIds: string[] = connection.config?.model_ids ?? [];
@@ -297,15 +349,17 @@ export async function getModelRow(env: Env, id: string): Promise<ModelRow | null
 export async function getBaseModels(env: Env): Promise<ModelEntry[]> {
 	const config = await getConfigMany(env, ['workers_ai.enable', 'workers_ai.models']);
 	const nvidia = await nvidiaConnection(env);
+	const ollama = await ollamaConnection(env);
 	const connections = await openaiConnections(env);
 
 	// NVIDIA NIM is listed first so it is the default option in the picker.
-	const [nvidiaModels, ...fetched] = await Promise.all([
+	const [nvidiaModels, ollamaModels, ...fetched] = await Promise.all([
 		nvidia ? fetchOpenAIModels(nvidia) : Promise.resolve([]),
+		ollama ? fetchOpenAIModels(ollama) : Promise.resolve([]),
 		...connections.map(fetchOpenAIModels)
 	]);
 
-	const models: ModelEntry[] = [...nvidiaModels, ...fetched.flat()];
+	const models: ModelEntry[] = [...nvidiaModels, ...ollamaModels, ...fetched.flat()];
 	if (config['workers_ai.enable'] !== false) {
 		models.push(...workersAIModels(env, (config['workers_ai.models'] as string[]) ?? []));
 	}
@@ -416,10 +470,13 @@ export async function resolveModel(env: Env, modelId: string): Promise<ResolvedM
 		return { id: modelId, upstreamId, entry: target, params, systemPrompt, workersAI: true };
 	}
 
-	// owned_by identifies the provider; NIM models resolve to the NIM connection.
+	// owned_by identifies the provider; NIM and Ollama models resolve to their
+	// own connection rather than the first OpenAI-compatible one.
 	const nvidia = await nvidiaConnection(env);
+	const ollama = target.owned_by === 'ollama' ? await ollamaConnection(env) : null;
 	const connections = await openaiConnections(env);
 	const connection =
+		ollama ??
 		(target.owned_by === 'nvidia' ? nvidia : null) ??
 		connections.find((item) => item.idx === target.urlIdx) ??
 		connections[0] ??

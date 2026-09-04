@@ -34,6 +34,9 @@ export interface Env {
 	OPENAI_API_KEYS?: string;
 	OPENAI_API_BASE_URL?: string;
 	OPENAI_API_BASE_URLS?: string;
+	OLLAMA_API_KEY?: string;
+	OLLAMA_API_KEYS?: string;
+	OLLAMA_BASE_URL?: string;
 	ENABLE_OPENAI_API?: string;
 	JWT_EXPIRES_IN?: string;
 	WEB_SEARCH_API_KEY?: string;
