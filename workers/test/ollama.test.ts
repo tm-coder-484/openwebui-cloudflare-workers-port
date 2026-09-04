@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OLLAMA_CLOUD_URL, ollamaConnection, ollamaKeys } from '../src/lib/models';
+import { OLLAMA_CLOUD_URL, ollamaBases, ollamaConnection, ollamaKeys } from '../src/lib/models';
 import type { Env } from '../src/types';
 
 const envWith = (stored: Record<string, unknown>, vars: Partial<Env> = {}): Env =>
@@ -143,5 +143,68 @@ describe('keys entered through the Connections screen', () => {
 			'from-screen',
 			'from-var'
 		]);
+	});
+});
+
+describe('ollamaBases', () => {
+	// Ollama serves two APIs from one host: the native one at the root and an
+	// OpenAI-compatible one under /v1. The Connections screen has a single URL
+	// field, so either form typed there has to yield both bases correctly.
+	it('derives both bases from a bare host', () => {
+		expect(ollamaBases('https://ollama.com')).toEqual({
+			openai: 'https://ollama.com/v1',
+			native: 'https://ollama.com'
+		});
+	});
+
+	it('does not double the /v1 when it is already there', () => {
+		expect(ollamaBases('https://ollama.com/v1')).toEqual({
+			openai: 'https://ollama.com/v1',
+			native: 'https://ollama.com'
+		});
+	});
+
+	it('strips a trailing slash from either form', () => {
+		expect(ollamaBases('https://ollama.com/v1/').openai).toBe('https://ollama.com/v1');
+		expect(ollamaBases('https://ollama.com/').openai).toBe('https://ollama.com/v1');
+	});
+
+	it('leaves a self-hosted host and port intact', () => {
+		expect(ollamaBases('http://ollama.internal:11434')).toEqual({
+			openai: 'http://ollama.internal:11434/v1',
+			native: 'http://ollama.internal:11434'
+		});
+	});
+
+	it('gives the native base that /api/tags appends to, not the /v1 one', () => {
+		// The bug this guards: `${openai}/api/tags` is https://ollama.com/v1/api/tags,
+		// which 404s. The native base is what that path belongs on.
+		expect(`${ollamaBases('https://ollama.com/v1').native}/api/tags`).toBe(
+			'https://ollama.com/api/tags'
+		);
+	});
+});
+
+describe('base URL forms reaching the connection', () => {
+	it('resolves a bare host to the OpenAI base', async () => {
+		const connection = await ollamaConnection(
+			envWith({
+				'ollama.enable': true,
+				'ollama.base_url': 'https://ollama.com',
+				'ollama.api_keys': ['k']
+			})
+		);
+		expect(connection?.url).toBe('https://ollama.com/v1');
+	});
+
+	it('pools screen keys whichever form each entry was typed in', async () => {
+		const connection = await ollamaConnection(
+			envWith({
+				'ollama.enable': true,
+				'ollama.base_urls': ['https://ollama.com', 'https://ollama.com/v1'],
+				'ollama.api_configs': { '0': { key: 'a' }, '1': { key: 'b' } }
+			})
+		);
+		expect([connection!.key, ...connection!.fallbackKeys!].sort()).toEqual(['a', 'b']);
 	});
 });

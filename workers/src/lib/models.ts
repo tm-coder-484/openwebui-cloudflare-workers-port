@@ -169,8 +169,11 @@ export async function ollamaConnection(env: Env): Promise<OpenAIConnection | nul
 	const baseUrls = ((config['ollama.base_urls'] as string[]) ?? []).map((entry) =>
 		String(entry).replace(/\/+$/, '')
 	);
-	const url =
+	// Accepts either form the Connections screen might hold — `https://ollama.com`
+	// or `https://ollama.com/v1` — and always talks OpenAI-style to `/v1`.
+	const configured =
 		String(config['ollama.base_url'] ?? '').replace(/\/+$/, '') || baseUrls[0] || OLLAMA_CLOUD_URL;
+	const url = ollamaBases(configured).openai;
 
 	// The Connections screen has no field for a key pool — it adds one
 	// connection at a time, each with its own key, under `api_configs`. Adding
@@ -179,7 +182,9 @@ export async function ollamaConnection(env: Env): Promise<OpenAIConnection | nul
 	// times over.
 	const configs = (config['ollama.api_configs'] as Record<string, any>) ?? {};
 	const fromConnections = baseUrls.flatMap((entry, index) =>
-		entry === url ? [String(configs[String(index)]?.key ?? configs[entry]?.key ?? '')] : []
+		ollamaBases(entry).openai === url
+			? [String(configs[String(index)]?.key ?? configs[entry]?.key ?? '')]
+			: []
 	);
 
 	const keys = ollamaKeys(env, [...ollamaKeys(env, config['ollama.api_keys']), ...fromConnections]);
@@ -198,6 +203,21 @@ export async function ollamaConnection(env: Env): Promise<OpenAIConnection | nul
 }
 
 export const OLLAMA_CLOUD_URL = 'https://ollama.com/v1';
+
+/**
+ * Splits an Ollama base URL into the two bases it actually needs.
+ *
+ * Ollama serves two different APIs: the native one at the root (`/api/tags`,
+ * `/api/version`) and an OpenAI-compatible one under `/v1`. The Connections
+ * screen has a single URL field and its Ollama section verifies through the
+ * native API, so whichever form is typed has to work for both — pasting
+ * `https://ollama.com/v1` must not produce `https://ollama.com/v1/api/tags`.
+ */
+export function ollamaBases(url: string): { openai: string; native: string } {
+	const trimmed = String(url ?? '').replace(/\/+$/, '');
+	const native = trimmed.replace(/\/v1$/, '');
+	return { openai: `${native}/v1`, native };
+}
 
 /** Accepts an array, or a newline/comma separated list, so 15 keys can be pasted in. */
 export function ollamaKeys(env: Env, stored: unknown): string[] {
