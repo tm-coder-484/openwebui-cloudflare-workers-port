@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { IMPLEMENTED_ENGINES, htmlToText, webSearch } from '../src/lib/websearch';
 import { parseQueries } from '../src/lib/completions';
 
@@ -199,6 +199,8 @@ describe('Ollama web search', () => {
 			);
 		}) as any;
 
+		// Pinned so the rotation starts at the first key for this one test.
+		const random = vi.spyOn(Math, 'random').mockReturnValue(0);
 		const results = await webSearch(
 			envWithConfig({
 				'web.search.engine': 'ollama_cloud',
@@ -206,8 +208,28 @@ describe('Ollama web search', () => {
 			}),
 			'q'
 		);
+		random.mockRestore();
 		expect(tried).toEqual(['Bearer key-a', 'Bearer key-b']);
 		expect(results).toHaveLength(1);
+	});
+
+	it('rotates the starting key so one key does not absorb every request', async () => {
+		// Walking the pool from the front sends everything to the first key until
+		// it is rate-limited, which wastes a round trip per call and leaves the
+		// rest of the pool idle.
+		const firstTried: string[] = [];
+		globalThis.fetch = (async (_url: string, init: RequestInit) => {
+			firstTried.push(String((init.headers as any).Authorization));
+			return new Response('{"results":[]}', { headers: { 'Content-Type': 'application/json' } });
+		}) as any;
+
+		const env = envWithConfig({
+			'web.search.engine': 'ollama_cloud',
+			'web.search.ollama_cloud.api_key': 'key-a,key-b,key-c,key-d,key-e'
+		});
+		for (let i = 0; i < 60; i += 1) await webSearch(env, 'q');
+
+		expect(new Set(firstTried).size).toBe(5);
 	});
 
 	it('reuses the keys entered under Connections, so no second key is needed', async () => {

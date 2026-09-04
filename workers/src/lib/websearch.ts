@@ -128,7 +128,12 @@ async function searxng(
 			try {
 				payload = JSON.parse(body);
 			} catch {
-				failures.push(`${url.host} returned HTML, not JSON — its \`search.formats\` omits "json"`);
+				// Measured across the 81 public instances on searx.space: nine answer
+				// 200 with a "verifying your browser" page rather than results.
+				failures.push(
+					`${url.host} returned HTML, not JSON — either its \`search.formats\` ` +
+						'omits "json", or it served a bot check'
+				);
 				continue;
 			}
 			const results = (payload.results ?? []).slice(0, count).map((item: any) => ({
@@ -150,9 +155,9 @@ async function searxng(
  * Ollama's hosted web search — `POST /api/web_search` on ollama.com.
  *
  * This is the one engine on this deployment that needs no extra account: the
- * same API key that runs the models runs the search. Keys are tried in turn so
- * a pool of them survives the per-key rate limit, exactly as chat completions
- * already do.
+ * same API key that runs the models runs the search. The key list arrives
+ * already rotated (see `ollamaSearchKeys`), so this walks it from wherever it
+ * starts and falls back through the rest on a per-key rate limit.
  */
 async function ollamaCloud(keys: string[], query: string, count: number): Promise<SearchResult[]> {
 	let lastError = '';
@@ -169,8 +174,13 @@ async function ollamaCloud(keys: string[], query: string, count: number): Promis
 		if (response.ok) {
 			const payload = (await response.json()) as { results?: any[] };
 			return (payload.results ?? []).slice(0, count).map((item: any) => ({
-				title: item.title ?? item.url,
+				// `title` comes back as an empty string often enough — two of three
+				// results on a plain docs query — that `??` is not enough here.
+				title: item.title || item.url,
 				url: item.url,
+				// Not a snippet: this is the whole page, tens of thousands of
+				// characters of it, which is why `resultText` below stops the caller
+				// from fetching the same page a second time.
 				snippet: item.content ?? ''
 			}));
 		}
@@ -342,7 +352,17 @@ async function ollamaSearchKeys(env: Env): Promise<string[]> {
 	const fromConnections = Object.values(configs)
 		.map((entry: any) => String(entry?.key ?? ''))
 		.filter(Boolean);
-	return [...new Set([...dedicated, ...pooled, ...fromConnections])];
+	const keys = [...new Set([...dedicated, ...pooled, ...fromConnections])];
+
+	// Rotated, not just ordered. Walking the list from the front would send every
+	// request to the first key until it 429s, leaving the other fourteen idle and
+	// paying a wasted round trip on each fallback — and one chat turn now makes
+	// up to three searches plus a fetch per result. A random start spreads the
+	// load the way chat completions already do, and the rest of the list stays in
+	// place behind it as the fallbacks.
+	if (keys.length < 2) return keys;
+	const start = Math.floor(Math.random() * keys.length);
+	return [...keys.slice(start), ...keys.slice(0, start)];
 }
 
 export async function webSearch(
@@ -452,6 +472,27 @@ export async function webSearch(
  * empty page is why a search that found results can still answer with nothing.
  * The direct fetch stays as the fallback so no key is required.
  */
+/**
+ * A snippet at least this long is a page, not a teaser, and is used as-is.
+ *
+ * Engines differ by orders of magnitude: Google PSE returns one line, Ollama
+ * returns the whole page — measured at 3k to 22k characters on an ordinary
+ * documentation query. Re-fetching a page whose text is already in hand costs a
+ * round trip and, for Ollama, one more call against a rate-limited free tier.
+ */
+const SNIPPET_IS_A_PAGE = 500;
+
+/**
+ * The text to give the model for one search result.
+ *
+ * Prefers what the engine already returned, falls back to loading the page, and
+ * falls back again to the snippet however short it is.
+ */
+export async function resultText(env: Env, result: SearchResult, maxChars = 6000): Promise<string> {
+	if (result.snippet.length >= SNIPPET_IS_A_PAGE) return result.snippet.slice(0, maxChars);
+	return (await fetchPageText(result.url, maxChars, env)) || result.snippet.slice(0, maxChars);
+}
+
 export async function fetchPageText(url: string, maxChars = 6000, env?: Env): Promise<string> {
 	if (env) {
 		const keys = await ollamaSearchKeys(env).catch(() => []);

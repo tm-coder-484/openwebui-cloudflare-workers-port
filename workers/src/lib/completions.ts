@@ -21,7 +21,7 @@ import {
 	renderMessages
 } from './prompts';
 import { search } from './retrieval';
-import { fetchPageText, webSearch } from './websearch';
+import { resultText, webSearch } from './websearch';
 import { HttpError, now, toJSON } from './util';
 
 /** OpenAI sampling parameters we forward; everything else is Open WebUI's own. */
@@ -791,7 +791,7 @@ async function runWebSearch(env: Env, job: CompletionJob, emit: EventEmitter): P
 		const parts: string[] = [];
 		const sources: Record<string, unknown>[] = [];
 		for (const [index, result] of results.entries()) {
-			const text = (await fetchPageText(result.url, 6000, env)) || result.snippet;
+			const text = await resultText(env, result);
 			if (!text) continue;
 			parts.push(
 				`<source id="${index + 1}" name="${result.title || result.url}" url="${result.url}">${text}</source>`

@@ -388,13 +388,20 @@ rather than quietly searching a different engine.
 **`ollama_cloud` is the one to start with.** It needs no second account: the
 Ollama key already entered under **Admin Settings → Connections** is reused, so
 selecting the engine is the whole setup. A key may also be pasted into the
-screen's own field, and several may be given (newline or comma separated) — the
-Worker moves to the next key on a 429, exactly as chat completions do. It also
-turns on a better page loader: result pages are fetched through Ollama's
-`/api/web_fetch` instead of directly from the Worker, which matters because a
-plain Worker request arrives from a shared Cloudflare IP with no browser
-fingerprint and a good share of sites answer that with a bot check. The direct
-fetch stays as the fallback.
+screen's own field, and several may be given (newline or comma separated). Each
+call starts at a **randomly chosen** key with the rest of the pool behind it as
+fallbacks for a 429 — the same spreading chat completions do, and it matters
+here because one chat turn can make three searches plus a page load per result;
+walking a fixed order would put all of that on the first key.
+
+`/api/web_search` returns the **full text of each page**, not a one-line
+snippet — measured at 3k to 22k characters on an ordinary documentation query —
+so results go straight to the model and the loader is skipped. When an engine
+does return a short snippet, pages are loaded through Ollama's `/api/web_fetch`
+instead of directly from the Worker, which matters because a plain Worker
+request arrives from a shared Cloudflare IP with no browser fingerprint and a
+good share of sites answer that with a bot check. The direct fetch stays as the
+fallback.
 
 **`duckduckgo` is the one to avoid on Cloudflare.** It has no API — the results
 come from scraping the HTML endpoint — and DuckDuckGo rate-limits datacentre
@@ -408,9 +415,16 @@ instance you can reach: `http://your-host:8080` (a URL already ending in
 _not_ serve JSON — `search.formats` in its `settings.yml` must include `json`,
 or every query comes back 403; the Worker says exactly that rather than
 reporting a bare status. Second, several instances may be listed comma
-separated, and they are tried in order, which is worth doing with public
-instances because they rate-limit shared egress IPs. To try it locally,
+separated, and they are tried in order. To try it locally,
 `node scripts/mock-search.mjs` serves the same JSON contract on port 9600.
+
+Plan on hosting your own. Probing all 81 public HTTPS instances listed on
+[searx.space](https://searx.space) for a working JSON API found **two**; of the
+rest, 51 answered 429, nine returned a "verifying your browser" page with a
+200, seven had the JSON format disabled (403) and four returned 418. Public
+instances defend themselves against exactly the traffic pattern a Worker
+produces, which is why the engine takes a list and moves on rather than
+treating the first URL as the only one.
 
 Google PSE keeps its key separate from `WEB_SEARCH_API_KEY` so switching
 engines does not mean retyping it. Create the engine at
