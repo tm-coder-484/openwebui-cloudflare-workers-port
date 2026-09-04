@@ -162,3 +162,26 @@ describe('renderSystemPrompt', () => {
 		expect(output).not.toContain('{{CURRENT_DATE}}');
 	});
 });
+
+describe('normalizeChunk reasoning', () => {
+	it('reads reasoning_content, which thinking models stream instead of content', () => {
+		const chunk = normalizeChunk({
+			choices: [{ delta: { reasoning_content: 'let me think' }, finish_reason: null }]
+		});
+		expect(chunk?.reasoning).toBe('let me think');
+		expect(chunk?.content).toBeUndefined();
+	});
+
+	it('also accepts the bare `reasoning` spelling', () => {
+		const chunk = normalizeChunk({ choices: [{ delta: { reasoning: 'hmm' } }] });
+		expect(chunk?.reasoning).toBe('hmm');
+	});
+
+	it('keeps content and reasoning separate when a chunk carries both', () => {
+		const chunk = normalizeChunk({
+			choices: [{ delta: { content: 'answer', reasoning_content: 'because' } }]
+		});
+		expect(chunk?.content).toBe('answer');
+		expect(chunk?.reasoning).toBe('because');
+	});
+});

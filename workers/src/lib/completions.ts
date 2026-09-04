@@ -409,6 +409,34 @@ export interface CompletionJob {
 }
 
 /** Executes one completion, streaming `chat:completion` events as it goes. */
+/**
+ * Accumulates `reasoning_content` into a collapsible block.
+ *
+ * The opening tag goes out with the first token and the closing tag when the
+ * answer starts (or the stream ends), so the block streams live rather than
+ * appearing all at once. It cannot carry a duration: the tag is already on the
+ * wire by the time the model stops thinking, and the port never rewrites text
+ * it has emitted.
+ */
+function openReasoningBlock() {
+	let open = false;
+
+	return {
+		/** The text to append for this reasoning delta. */
+		push(text: string): string {
+			if (open) return text;
+			open = true;
+			return `<details type="reasoning">\n<summary>Thinking</summary>\n${text}`;
+		},
+		/** The text that closes the block, or '' when none is open. */
+		close(): string {
+			if (!open) return '';
+			open = false;
+			return '\n</details>\n';
+		}
+	};
+}
+
 export async function runCompletion(
 	env: Env,
 	job: CompletionJob,
@@ -476,16 +504,46 @@ export async function runCompletion(
 		const request = buildUpstreamRequest(resolved, job.body, { stream });
 
 		if (stream) {
+			// Reasoning models stream their working as `reasoning_content` and may
+			// send no `content` at all for a long stretch — sometimes for the whole
+			// reply. The frontend renders a `<details type="reasoning">` block found
+			// in the message text, so the thinking is wrapped into one as it
+			// arrives, then closed when the answer proper starts.
+			const reasoning = openReasoningBlock();
+
 			for await (const chunk of streamUpstream(env, request)) {
 				if (chunk.usage) usage = chunk.usage;
-				if (chunk.content) {
-					content += chunk.content;
+
+				if (chunk.reasoning) {
+					const delta = reasoning.push(chunk.reasoning);
+					content += delta;
 					await emitCompletion({
 						id: job.messageId,
-						choices: [{ index: 0, delta: { content: chunk.content }, finish_reason: null }],
+						choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
 						done: false
 					});
 				}
+
+				if (chunk.content) {
+					const delta = reasoning.close() + chunk.content;
+					content += delta;
+					await emitCompletion({
+						id: job.messageId,
+						choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
+						done: false
+					});
+				}
+			}
+
+			// A model that only ever produced reasoning still needs its block shut.
+			const trailing = reasoning.close();
+			if (trailing) {
+				content += trailing;
+				await emitCompletion({
+					id: job.messageId,
+					choices: [{ index: 0, delta: { content: trailing }, finish_reason: null }],
+					done: false
+				});
 			}
 		} else {
 			const result = await callUpstream(env, request);
