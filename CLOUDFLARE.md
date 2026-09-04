@@ -338,7 +338,14 @@ OpenAI-compatible connection rather than through the native Ollama protocol —
 listing, streaming and routing all reuse the same path as every other provider.
 Its models are tagged **Ollama** in the picker.
 
-Configure it under **Admin Settings → Connections**, or with Worker vars:
+**Adding your keys.** The Connections screen has no field for a pool — it adds
+one connection at a time, each with its own key. So add
+`https://ollama.com/v1` once per key: **Admin Settings → Connections** →
+**Ollama** → **+** → the same URL, a different key each time. The Worker
+recognises repeated entries of the same host, pools their keys, and lists the
+models once rather than once per entry.
+
+Or set them in one go with a Worker var:
 
 | Setting             | Meaning                                                        |
 | ------------------- | -------------------------------------------------------------- |

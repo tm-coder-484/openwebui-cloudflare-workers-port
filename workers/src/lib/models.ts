@@ -157,11 +157,32 @@ export async function nvidiaConnection(env: Env): Promise<OpenAIConnection | nul
  * free tier that allows a thousand a day.
  */
 export async function ollamaConnection(env: Env): Promise<OpenAIConnection | null> {
-	const config = await getConfigMany(env, ['ollama.enable', 'ollama.base_url', 'ollama.api_keys']);
+	const config = await getConfigMany(env, [
+		'ollama.enable',
+		'ollama.base_url',
+		'ollama.api_keys',
+		'ollama.base_urls',
+		'ollama.api_configs'
+	]);
 	if (config['ollama.enable'] === false) return null;
 
-	const url = String(config['ollama.base_url'] ?? '').replace(/\/+$/, '') || OLLAMA_CLOUD_URL;
-	const keys = ollamaKeys(env, config['ollama.api_keys']);
+	const baseUrls = ((config['ollama.base_urls'] as string[]) ?? []).map((entry) =>
+		String(entry).replace(/\/+$/, '')
+	);
+	const url =
+		String(config['ollama.base_url'] ?? '').replace(/\/+$/, '') || baseUrls[0] || OLLAMA_CLOUD_URL;
+
+	// The Connections screen has no field for a key pool — it adds one
+	// connection at a time, each with its own key, under `api_configs`. Adding
+	// the same host fifteen times is therefore how fifteen keys get entered, so
+	// those keys are pooled here and the host is listed once instead of fifteen
+	// times over.
+	const configs = (config['ollama.api_configs'] as Record<string, any>) ?? {};
+	const fromConnections = baseUrls.flatMap((entry, index) =>
+		entry === url ? [String(configs[String(index)]?.key ?? configs[entry]?.key ?? '')] : []
+	);
+
+	const keys = ollamaKeys(env, [...ollamaKeys(env, config['ollama.api_keys']), ...fromConnections]);
 	// A self-hosted Ollama needs no key; the hosted service does.
 	if (!keys.length && url.includes('ollama.com')) return null;
 
