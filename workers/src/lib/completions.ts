@@ -728,15 +728,28 @@ async function runWebSearch(env: Env, job: CompletionJob, emit: EventEmitter): P
 }
 
 /**
- * Sends the request, moving to another key if the first is rate-limited.
+ * Sends the request, retrying a rate-limited one.
  *
- * Ollama Cloud limits each key separately, which is the whole reason for
- * configuring more than one. A 429 (or a 5xx, which the service also returns
- * under load) is retried with the next key rather than surfaced; anything else
- * is returned untouched, since a bad request will fail the same way on every
- * key.
+ * Ollama Cloud's 429 is a *concurrency* limit — one in-flight request with a
+ * five-deep queue — not a quota: measured against the live service, 120
+ * parallel requests produced 109 rejections while 25 sequential ones produced
+ * none. So waiting is what actually clears it, and the response carries
+ * `retry-after` in seconds saying how long.
+ *
+ * Each attempt also moves to another key when one is configured. Whether that
+ * helps depends on the limit being per-key rather than per-account, which is
+ * unconfirmed; it costs nothing either way, and the wait is doing the real
+ * work.
+ *
+ * Anything that is not a 429 or a 5xx is returned untouched — a malformed
+ * request or a model the account cannot use fails identically on every key and
+ * after every wait.
  */
+const RATE_LIMIT_ATTEMPTS = 3;
+const RATE_LIMIT_MAX_WAIT_MS = 15_000;
+
 async function fetchWithKeyFallback(request: UpstreamRequest): Promise<Response> {
+	const keys = request.fallbackKeys ?? [];
 	const send = (key?: string) =>
 		fetch(request.url!, {
 			method: 'POST',
@@ -747,12 +760,25 @@ async function fetchWithKeyFallback(request: UpstreamRequest): Promise<Response>
 		});
 
 	let response = await send();
-	for (const key of request.fallbackKeys ?? []) {
+
+	for (let attempt = 0; attempt < RATE_LIMIT_ATTEMPTS; attempt += 1) {
 		if (response.status !== 429 && response.status < 500) break;
+
+		// Honour the server's own figure, clamped so a long one cannot stall the
+		// request past what a user will wait. Falls back to a short backoff when
+		// the header is absent, as it is on a 5xx.
+		const header = Number(response.headers.get('retry-after'));
+		const wait = Math.min(
+			Number.isFinite(header) && header > 0 ? header * 1000 : 1000 * 2 ** attempt,
+			RATE_LIMIT_MAX_WAIT_MS
+		);
+
 		// The body has to be consumed or the connection is held open.
 		await response.body?.cancel().catch(() => {});
-		response = await send(key);
+		await new Promise((resolve) => setTimeout(resolve, wait));
+		response = await send(keys[attempt % Math.max(keys.length, 1)]);
 	}
+
 	return response;
 }
 
@@ -829,11 +855,19 @@ async function callUpstream(
 	};
 }
 
-async function errorDetail(response: Response): Promise<string> {
+export async function errorDetail(response: Response): Promise<string> {
 	const text = await response.text();
 	try {
 		const parsed = JSON.parse(text);
-		return parsed?.error?.message ?? parsed?.detail ?? text.slice(0, 500);
+		// Providers are not consistent even with themselves: Ollama returns
+		// {"error":{"message":…}} for 401/402 but a bare {"error":"…"} for 429.
+		const error = parsed?.error;
+		return (
+			(typeof error === 'string' ? error : error?.message) ??
+			parsed?.detail ??
+			parsed?.message ??
+			text.slice(0, 500)
+		);
 	} catch {
 		return text.slice(0, 500) || `Upstream error ${response.status}`;
 	}

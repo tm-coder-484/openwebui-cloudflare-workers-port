@@ -3,7 +3,8 @@ import {
 	buildUpstreamRequest,
 	normalizeChunk,
 	readSSE,
-	renderSystemPrompt
+	renderSystemPrompt,
+	errorDetail
 } from '../src/lib/completions';
 import type { ResolvedModel } from '../src/lib/models';
 
@@ -183,5 +184,54 @@ describe('normalizeChunk reasoning', () => {
 		});
 		expect(chunk?.content).toBe('answer');
 		expect(chunk?.reasoning).toBe('because');
+	});
+});
+
+describe('provider error shapes', () => {
+	const res = (body: string, status = 400) =>
+		new Response(body, { status, headers: { 'Content-Type': 'application/json' } });
+
+	it('reads the OpenAI shape', async () => {
+		expect(await errorDetail(res('{"error":{"message":"Unauthorized"}}', 401))).toBe(
+			'Unauthorized'
+		);
+	});
+
+	it("reads Ollama's bare-string 429 without returning raw JSON", async () => {
+		// Its 401/402 are OpenAI-shaped but its 429 is {"error":"..."}.
+		expect(await errorDetail(res('{"error":"too many concurrent requests"}', 429))).toBe(
+			'too many concurrent requests'
+		);
+	});
+
+	it('surfaces the upgrade message on a gated model', async () => {
+		const body = JSON.stringify({
+			error: { message: 'this model requires a subscription', type: 'api_error' }
+		});
+		expect(await errorDetail(res(body, 402))).toBe('this model requires a subscription');
+	});
+
+	it('falls back to the raw text when the body is not JSON', async () => {
+		expect(await errorDetail(res('upstream exploded', 500))).toBe('upstream exploded');
+	});
+});
+
+describe('normalizeChunk against a real Ollama delta', () => {
+	it('ignores the empty content string sent alongside reasoning', () => {
+		// Ollama streams {"content":"","reasoning":" user"} during thinking, so
+		// testing for the key's presence rather than its truthiness would emit
+		// hundreds of empty deltas.
+		const chunk = normalizeChunk({
+			choices: [{ index: 0, delta: { content: '', reasoning: ' user' }, finish_reason: null }]
+		});
+		expect(chunk?.reasoning).toBe(' user');
+		expect(chunk?.content).toBe('');
+		expect(Boolean(chunk?.content)).toBe(false);
+	});
+
+	it('handles the final empty delta that closes the stream', () => {
+		const chunk = normalizeChunk({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+		expect(chunk?.finishReason).toBe('stop');
+		expect(chunk?.content).toBeUndefined();
 	});
 });
