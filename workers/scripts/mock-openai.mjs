@@ -13,6 +13,7 @@ import { createServer } from 'node:http';
 const PORT = Number(process.env.MOCK_OPENAI_PORT ?? 11435);
 // `mock-reasoner` streams reasoning_content the way a thinking model does,
 // which is the case that used to render as an empty message.
+let busyOnceServed = false;
 const MODELS = ['mock-gpt', 'mock-gpt-mini', 'mock-reasoner'];
 
 const readBody = (req) =>
@@ -62,6 +63,15 @@ createServer(async (req, res) => {
 		if ((req.headers.authorization ?? '').includes('rate-limited-key')) {
 			res.writeHead(429, { 'Content-Type': 'application/json' });
 			return res.end(JSON.stringify({ error: { message: 'rate limit exceeded' } }));
+		}
+		// Mimics Ollama Cloud's concurrency limit: the first call is rejected with a
+		// bare-string body and a retry-after, the next succeeds.
+		if ((req.headers.authorization ?? '').includes('busy-once')) {
+			if (!busyOnceServed) {
+				busyOnceServed = true;
+				res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': '1' });
+				return res.end(JSON.stringify({ error: 'too many concurrent requests' }));
+			}
 		}
 		const body = await readBody(req);
 		if (process.env.MOCK_OPENAI_DEBUG) {
