@@ -39,6 +39,10 @@ const WEB_KEYS: Record<string, string> = {
 	GOOGLE_PSE_ENGINE_ID: 'web.search.google_pse.engine_id',
 	WEB_SEARCH_URL: 'web.search.url',
 	SEARXNG_QUERY_URL: 'web.search.url',
+	SEARXNG_LANGUAGE: 'web.search.searxng.language',
+	// The screen renders this field for the `ollama_cloud` engine; without it in
+	// the map the value was accepted, discarded, and came back blank on reload.
+	OLLAMA_CLOUD_WEB_SEARCH_API_KEY: 'web.search.ollama_cloud.api_key',
 	WEB_SEARCH_RESULT_COUNT: 'web.search.result_count',
 	WEB_LOADER_ENGINE: 'web.loader.engine',
 	WEB_SEARCH_DOMAIN_FILTER_LIST: 'web.search.domain_filter_list',
@@ -47,7 +51,8 @@ const WEB_KEYS: Record<string, string> = {
 	BYPASS_WEB_SEARCH_WEB_LOADER: 'web.search.bypass_loader',
 	ENABLE_WEB_LOADER_SSL_VERIFICATION: 'web.loader.ssl_verification',
 	ENABLE_WEB_SEARCH_CONFIRMATION: 'web.search.confirmation.enable',
-	WEB_SEARCH_CONCURRENT_REQUESTS: 'web.search.concurrent_requests'
+	WEB_SEARCH_CONCURRENT_REQUESTS: 'web.search.concurrent_requests',
+	WEB_LOADER_CONCURRENT_REQUESTS: 'web.loader.concurrent_requests'
 };
 
 const readConfig = async (c: any) => {
@@ -272,7 +277,7 @@ app.post('/process/web/search', async (c) => {
 	const docs = [];
 	const files = [];
 	for (const result of results) {
-		const text = (await fetchPageText(result.url)) || result.snippet;
+		const text = (await fetchPageText(result.url, 6000, c.env)) || result.snippet;
 		if (!text) continue;
 
 		const id = uuid();

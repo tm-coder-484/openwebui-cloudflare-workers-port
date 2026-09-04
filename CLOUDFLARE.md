@@ -371,15 +371,46 @@ has to be exposed over HTTPS.
 
 ### Web search
 
-Enable it under **Admin Settings → Web Search**, or with the config API. Five
+Enable it under **Admin Settings → Web Search**, or with the config API. Seven
 providers ship, all over plain `fetch`:
 
 | `WEB_SEARCH_ENGINE`         | Needs                                                          |
 | --------------------------- | -------------------------------------------------------------- |
+| `ollama_cloud`              | an Ollama API key — the same one that runs the models          |
 | `duckduckgo` (default)      | nothing — best-effort HTML scrape, can be rate-limited         |
-| `searxng`                   | `WEB_SEARCH_URL` pointing at your instance                     |
+| `searxng`                   | the URL of a SearXNG instance you host                         |
 | `tavily`, `serper`, `brave` | `WEB_SEARCH_API_KEY`                                           |
 | `google_pse`                | `GOOGLE_PSE_API_KEY` **and** `GOOGLE_PSE_ENGINE_ID` (the `cx`) |
+
+Anything else the dropdown offers is refused with a message naming these seven,
+rather than quietly searching a different engine.
+
+**`ollama_cloud` is the one to start with.** It needs no second account: the
+Ollama key already entered under **Admin Settings → Connections** is reused, so
+selecting the engine is the whole setup. A key may also be pasted into the
+screen's own field, and several may be given (newline or comma separated) — the
+Worker moves to the next key on a 429, exactly as chat completions do. It also
+turns on a better page loader: result pages are fetched through Ollama's
+`/api/web_fetch` instead of directly from the Worker, which matters because a
+plain Worker request arrives from a shared Cloudflare IP with no browser
+fingerprint and a good share of sites answer that with a bot check. The direct
+fetch stays as the fallback.
+
+**`duckduckgo` is the one to avoid on Cloudflare.** It has no API — the results
+come from scraping the HTML endpoint — and DuckDuckGo rate-limits datacentre
+IPs hard, so a deployed Worker frequently gets an empty page back and the chat
+reports "No web results found" with nothing to explain it. It is the default
+only because it needs no key.
+
+**SearXNG** is software you run, not a hosted API, so it needs the URL of an
+instance you can reach: `http://your-host:8080` (a URL already ending in
+`/search` is accepted as-is). Two things to know. First, a stock instance does
+_not_ serve JSON — `search.formats` in its `settings.yml` must include `json`,
+or every query comes back 403; the Worker says exactly that rather than
+reporting a bare status. Second, several instances may be listed comma
+separated, and they are tried in order, which is worth doing with public
+instances because they rate-limit shared egress IPs. To try it locally,
+`node scripts/mock-search.mjs` serves the same JSON contract on port 9600.
 
 Google PSE keeps its key separate from `WEB_SEARCH_API_KEY` so switching
 engines does not mean retyping it. Create the engine at
@@ -478,8 +509,9 @@ up automatically and runs the full round trip.
 - Calendar: calendars, recurring events, attendees and RSVPs, plus a read-only
   "Scheduled Tasks" calendar showing automation runs
 - Memories, feedback/evaluations, admin usage analytics
-- Web search in chat (DuckDuckGo, SearXNG, Tavily, Serper, Brave) with page
-  retrieval, status updates and citations
+- Web search in chat (Ollama Cloud, Google PSE, SearXNG, Tavily, Serper, Brave,
+  DuckDuckGo) with model-generated queries, page retrieval, status updates and
+  citations
 - Text-to-speech and transcription (Workers AI Whisper or an OpenAI endpoint)
 - Image generation (OpenAI-compatible or Workers AI)
 

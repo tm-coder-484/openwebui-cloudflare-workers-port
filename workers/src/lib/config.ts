@@ -149,8 +149,14 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'web.search.google_pse.api_key': '',
 	'web.search.google_pse.engine_id': '',
 	'web.search.url': '',
+	'web.search.searxng.language': 'en',
+	'web.search.ollama_cloud.api_key': '',
 	'web.search.result_count': 3,
 	'web.search.concurrent_requests': 5,
+	// The Web Search screen marks this input `required`, so leaving it unset
+	// makes the browser refuse to submit the form and nothing on the whole
+	// screen can be saved.
+	'web.loader.concurrent_requests': 5,
 	'web.search.domain_filter_list': '',
 	'web.search.bypass_embedding': false,
 	'web.search.bypass_loader': false,

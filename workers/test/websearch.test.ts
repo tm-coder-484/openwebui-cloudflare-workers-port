@@ -107,9 +107,7 @@ describe('unimplemented engines', () => {
 	it('says so instead of silently searching DuckDuckGo', async () => {
 		// The admin screen offers thirty engines; falling through made every
 		// unimplemented one look like it worked, with results from the wrong place.
-		await expect(webSearch(envWithEngine('ollama_cloud'), 'anything')).rejects.toThrow(
-			/not implemented/i
-		);
+		await expect(webSearch(envWithEngine('kagi'), 'anything')).rejects.toThrow(/not implemented/i);
 	});
 
 	it('names the engines that do work', async () => {
@@ -119,6 +117,199 @@ describe('unimplemented engines', () => {
 	it('still serves the engines it implements', () => {
 		expect(IMPLEMENTED_ENGINES).toContain('google_pse');
 		expect(IMPLEMENTED_ENGINES).toContain('duckduckgo');
+	});
+});
+
+/** A DB stub returning exactly the config rows a test cares about. */
+const envWithConfig = (rows: Record<string, unknown>) =>
+	({
+		DB: {
+			prepare: () => ({
+				bind: () => ({ all: async () => ({ results: [] }) }),
+				all: async () => ({
+					results: Object.entries(rows).map(([key, value]) => ({
+						key,
+						value: JSON.stringify(value)
+					}))
+				})
+			})
+		}
+	}) as any;
+
+describe('Ollama web search', () => {
+	it('posts the query to ollama.com with the configured key and maps results', async () => {
+		const calls: { url: string; auth: string; body: any }[] = [];
+		globalThis.fetch = (async (url: string, init: RequestInit) => {
+			calls.push({
+				url: String(url),
+				auth: String((init.headers as any).Authorization),
+				body: JSON.parse(String(init.body))
+			});
+			return new Response(
+				JSON.stringify({
+					results: [{ title: 'Ollama', url: 'https://ollama.com/', content: 'cloud models' }]
+				}),
+				{ headers: { 'Content-Type': 'application/json' } }
+			);
+		}) as any;
+
+		const results = await webSearch(
+			envWithConfig({
+				'web.search.engine': 'ollama_cloud',
+				'web.search.ollama_cloud.api_key': 'key-a'
+			}),
+			'what is ollama',
+			{ count: 5 }
+		);
+
+		expect(calls[0].url).toBe('https://ollama.com/api/web_search');
+		expect(calls[0].auth).toBe('Bearer key-a');
+		expect(calls[0].body).toEqual({ query: 'what is ollama', max_results: 5 });
+		expect(results).toEqual([
+			{ title: 'Ollama', url: 'https://ollama.com/', snippet: 'cloud models' }
+		]);
+	});
+
+	it('clamps max_results to the 10 the API allows', async () => {
+		let body: any;
+		globalThis.fetch = (async (_url: string, init: RequestInit) => {
+			body = JSON.parse(String(init.body));
+			return new Response('{"results":[]}', { headers: { 'Content-Type': 'application/json' } });
+		}) as any;
+		await webSearch(
+			envWithConfig({
+				'web.search.engine': 'ollama_cloud',
+				'web.search.ollama_cloud.api_key': 'key-a'
+			}),
+			'q',
+			{ count: 50 }
+		);
+		expect(body.max_results).toBe(10);
+	});
+
+	it('falls through to the next key when one is rate-limited', async () => {
+		const tried: string[] = [];
+		globalThis.fetch = (async (_url: string, init: RequestInit) => {
+			const auth = String((init.headers as any).Authorization);
+			tried.push(auth);
+			if (auth === 'Bearer key-a') return new Response('rate limited', { status: 429 });
+			return new Response(
+				JSON.stringify({ results: [{ title: 'T', url: 'https://a.test', content: 'c' }] }),
+				{ headers: { 'Content-Type': 'application/json' } }
+			);
+		}) as any;
+
+		const results = await webSearch(
+			envWithConfig({
+				'web.search.engine': 'ollama_cloud',
+				'web.search.ollama_cloud.api_key': 'key-a\nkey-b'
+			}),
+			'q'
+		);
+		expect(tried).toEqual(['Bearer key-a', 'Bearer key-b']);
+		expect(results).toHaveLength(1);
+	});
+
+	it('reuses the keys entered under Connections, so no second key is needed', async () => {
+		let auth = '';
+		globalThis.fetch = (async (_url: string, init: RequestInit) => {
+			auth = String((init.headers as any).Authorization);
+			return new Response('{"results":[]}', { headers: { 'Content-Type': 'application/json' } });
+		}) as any;
+
+		await webSearch(
+			envWithConfig({
+				'web.search.engine': 'ollama_cloud',
+				'ollama.api_configs': { '0': { key: 'connections-key' } }
+			}),
+			'q'
+		);
+		expect(auth).toBe('Bearer connections-key');
+	});
+
+	it('asks for a key rather than searching without one', async () => {
+		await expect(
+			webSearch(envWithConfig({ 'web.search.engine': 'ollama_cloud' }), 'q')
+		).rejects.toThrow(/needs an Ollama API key/i);
+	});
+});
+
+describe('SearXNG', () => {
+	const searxngEnv = (extra: Record<string, unknown> = {}) =>
+		envWithConfig({ 'web.search.engine': 'searxng', ...extra });
+
+	it('requests the JSON API and maps results', async () => {
+		let called = '';
+		globalThis.fetch = (async (url: string) => {
+			called = String(url);
+			return new Response(
+				JSON.stringify({ results: [{ title: 'T', url: 'https://a.test', content: 'c' }] }),
+				{ headers: { 'Content-Type': 'application/json' } }
+			);
+		}) as any;
+
+		const results = await webSearch(
+			searxngEnv({ 'web.search.url': 'https://searx.test', 'web.search.searxng.language': 'en' }),
+			'workers'
+		);
+		expect(called).toContain('https://searx.test/search?');
+		expect(called).toContain('format=json');
+		expect(called).toContain('language=en');
+		expect(results).toEqual([{ title: 'T', url: 'https://a.test', snippet: 'c' }]);
+	});
+
+	it('does not double up /search on a query URL that already has it', async () => {
+		let called = '';
+		globalThis.fetch = (async (url: string) => {
+			called = String(url);
+			return new Response(JSON.stringify({ results: [{ title: 'T', url: 'https://a.test' }] }), {
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}) as any;
+		await webSearch(searxngEnv({ 'web.search.url': 'https://searx.test/search' }), 'workers');
+		expect(called).not.toContain('/search/search');
+	});
+
+	it('tries the next instance when the first one fails', async () => {
+		const hosts: string[] = [];
+		globalThis.fetch = (async (url: string) => {
+			const host = new URL(String(url)).host;
+			hosts.push(host);
+			if (host === 'first.test') return new Response('nope', { status: 429 });
+			return new Response(JSON.stringify({ results: [{ title: 'T', url: 'https://a.test' }] }), {
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}) as any;
+
+		const results = await webSearch(
+			searxngEnv({ 'web.search.url': 'https://first.test, https://second.test' }),
+			'workers'
+		);
+		expect(hosts).toEqual(['first.test', 'second.test']);
+		expect(results).toHaveLength(1);
+	});
+
+	it('explains a 403 as the JSON format being disabled, not a bad key', async () => {
+		// The single most common SearXNG failure: a stock instance serves HTML
+		// only, and `format=json` comes back 403 on an engine that has no key.
+		globalThis.fetch = (async () => new Response('forbidden', { status: 403 })) as any;
+		await expect(
+			webSearch(searxngEnv({ 'web.search.url': 'https://searx.test' }), 'workers')
+		).rejects.toThrow(/search\.formats/);
+	});
+
+	it('says an HTML answer is not the JSON API', async () => {
+		globalThis.fetch = (async () =>
+			new Response('<html><body>results</body></html>', {
+				headers: { 'Content-Type': 'text/html' }
+			})) as any;
+		await expect(
+			webSearch(searxngEnv({ 'web.search.url': 'https://searx.test' }), 'workers')
+		).rejects.toThrow(/returned HTML, not JSON/);
+	});
+
+	it('explains that an instance URL is required', async () => {
+		await expect(webSearch(searxngEnv(), 'workers')).rejects.toThrow(/software you host/i);
 	});
 });
 
