@@ -11,7 +11,9 @@
 import { createServer } from 'node:http';
 
 const PORT = Number(process.env.MOCK_OPENAI_PORT ?? 11435);
-const MODELS = ['mock-gpt', 'mock-gpt-mini'];
+// `mock-reasoner` streams reasoning_content the way a thinking model does,
+// which is the case that used to render as an empty message.
+const MODELS = ['mock-gpt', 'mock-gpt-mini', 'mock-reasoner'];
 
 const readBody = (req) =>
 	new Promise((resolve) => {
@@ -100,13 +102,21 @@ createServer(async (req, res) => {
 				res.end();
 				return;
 			}
+			// A thinking model streams its working first, as reasoning_content,
+			// and only then the answer. Both arrive on `delta`.
+			const thinking = body.model === 'mock-reasoner' && index < 3;
+			const token = (index ? ' ' : '') + words[index];
 			res.write(
 				`data: ${JSON.stringify({
 					id: 'mock-1',
 					object: 'chat.completion.chunk',
 					model: body.model ?? MODELS[0],
 					choices: [
-						{ index: 0, delta: { content: (index ? ' ' : '') + words[index] }, finish_reason: null }
+						{
+							index: 0,
+							delta: thinking ? { reasoning_content: token } : { content: token },
+							finish_reason: null
+						}
 					]
 				})}\n\n`
 			);
