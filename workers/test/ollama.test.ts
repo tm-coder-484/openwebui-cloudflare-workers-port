@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { OLLAMA_CLOUD_URL, ollamaBases, ollamaConnection, ollamaKeys } from '../src/lib/models';
 import type { Env } from '../src/types';
+import { Hono } from 'hono';
+import ollamaRoutes from '../src/routes/ollama';
+import { HttpError } from '../src/lib/util';
 
 const envWith = (stored: Record<string, unknown>, vars: Partial<Env> = {}): Env =>
 	({
@@ -206,5 +209,107 @@ describe('base URL forms reaching the connection', () => {
 			})
 		);
 		expect([connection!.key, ...connection!.fallbackKeys!].sort()).toEqual(['a', 'b']);
+	});
+});
+
+// --- the /ollama/* proxy -----------------------------------------------------
+// These routes speak the native protocol, which lives at the root of the host.
+// A connection entered as `https://ollama.com/v1` — the form the model side
+// wants, and the one the setup guide gives — used to be pasted straight in
+// front of `/api/tags`, producing a 404 that the route then reported as an
+// empty model list.
+describe('the /ollama proxy', () => {
+	// The routes call verifiedUser(c), which reads the session off the context,
+	// and the real app maps HttpError onto a status + `detail`. Both are stood up
+	// here so the test exercises the route exactly as it is served.
+	const request = (path: string, env: Env) => {
+		const harness = new Hono<any>({ strict: false });
+		harness.use('*', async (c: any, next: any) => {
+			c.set('user', { id: 'u1', email: 'a@b.test', role: 'admin' });
+			await next();
+		});
+		harness.route('/ollama', ollamaRoutes);
+		harness.onError((error: any, c: any) =>
+			error instanceof HttpError
+				? c.json({ detail: error.message }, error.status)
+				: c.json({ detail: String(error?.message ?? error) }, 500)
+		);
+		// Hono's signature is (input, requestInit, Env, executionCtx) — the env
+		// goes in the third slot, not the second.
+		return harness.request(new Request(`https://worker.test/ollama${path}`), undefined, env, {
+			passThroughOnException() {},
+			waitUntil() {}
+		} as any);
+	};
+
+	const cloudEnv = (overrides: Record<string, unknown> = {}, vars: Partial<Env> = {}) =>
+		envWith(
+			{
+				'ollama.enable': true,
+				'ollama.base_urls': ['https://ollama.com/v1'],
+				'ollama.api_configs': {},
+				...overrides
+			},
+			vars
+		);
+
+	it('asks the root for tags, not the /v1 shim', async () => {
+		const called: string[] = [];
+		globalThis.fetch = (async (url: string) => {
+			called.push(String(url));
+			return new Response('{"models":[{"name":"gpt-oss:20b"}]}', {
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}) as any;
+
+		const response = await request('/api/tags', cloudEnv({}, { OLLAMA_API_KEYS: 'key-a' }));
+		expect(called).toEqual(['https://ollama.com/api/tags']);
+		expect((await response.json()).models).toHaveLength(1);
+	});
+
+	it('sends the pooled key as a bearer token', async () => {
+		let auth = '';
+		globalThis.fetch = (async (_url: string, init: RequestInit) => {
+			auth = String((init.headers as any).Authorization ?? '');
+			return new Response('{"models":[]}', { headers: { 'Content-Type': 'application/json' } });
+		}) as any;
+
+		await request('/api/tags', cloudEnv({}, { OLLAMA_API_KEYS: 'pooled-key' })).catch(() => {});
+		expect(auth).toBe('Bearer pooled-key');
+	});
+
+	it("prefers a connection's own key over the pool", async () => {
+		let auth = '';
+		globalThis.fetch = (async (_url: string, init: RequestInit) => {
+			auth = String((init.headers as any).Authorization ?? '');
+			return new Response('{"models":[]}', { headers: { 'Content-Type': 'application/json' } });
+		}) as any;
+
+		await request(
+			'/api/tags',
+			cloudEnv({ 'ollama.api_configs': { '0': { key: 'own-key' } } }, { OLLAMA_API_KEYS: 'pooled' })
+		).catch(() => {});
+		expect(auth).toBe('Bearer own-key');
+	});
+
+	it('reports a failure instead of answering with an empty model list', async () => {
+		// The silent empty list is what made a 404 look like "this account has no
+		// models" rather than "the URL was wrong".
+		globalThis.fetch = (async () => new Response('not found', { status: 404 })) as any;
+		const response = await request('/api/tags', cloudEnv({}, { OLLAMA_API_KEYS: 'key-a' }));
+		expect(response.status).toBe(502);
+		expect((await response.json()).detail).toMatch(/responded 404/);
+	});
+
+	it('names the missing key when the server rejects the request', async () => {
+		globalThis.fetch = (async () => new Response('unauthorized', { status: 401 })) as any;
+		const response = await request('/api/tags', cloudEnv());
+		expect((await response.json()).detail).toMatch(/needs an API key/i);
+	});
+
+	it('still answers with an empty list when nothing is configured', async () => {
+		const response = await request('/api/tags', envWith({ 'ollama.enable': false }));
+		expect(response.status).toBe(200);
+		expect((await response.json()).models).toEqual([]);
 	});
 });
