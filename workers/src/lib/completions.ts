@@ -584,7 +584,17 @@ function openReasoningBlock() {
 export async function runCompletion(
 	env: Env,
 	job: CompletionJob,
-	emit: EventEmitter
+	emit: EventEmitter,
+	/**
+	 * Aborted when the reader presses Stop.
+	 *
+	 * The stream is abandoned rather than the request cancelled: dropping out of
+	 * the read loop closes the upstream body, and the turn then ends the way any
+	 * other does, so whatever had been written is saved and the message is
+	 * marked finished. A stop that left the message unfinished would be a worse
+	 * outcome than the one it interrupted.
+	 */
+	signal?: AbortSignal
 ): Promise<void> {
 	const emitCompletion = (data: Record<string, unknown>) =>
 		emit({
@@ -748,12 +758,47 @@ export async function runCompletion(
 				await emitMessage();
 			};
 
+			/**
+			 * Writes the answer so far into the chat.
+			 *
+			 * The turn survives the client leaving — it runs in the Durable Object
+			 * that owns the socket, not in the request — but until this existed
+			 * nothing was written until it finished. Reload while a model was
+			 * working and the message was there and empty, and stayed empty for as
+			 * long as the model took, which on a reasoning model is a minute or
+			 * more.
+			 *
+			 * Coalesced rather than written per token: a token is a few characters
+			 * and a write is a round trip to D1. Half a second is under what a
+			 * reader notices on a reload and turns a thousand-token answer into
+			 * tens of writes rather than a thousand.
+			 *
+			 * A failed write is swallowed. The next one supersedes it, the write
+			 * that ends the turn is what the message is judged on, and a chat that
+			 * cannot be saved is not a reason to stop answering.
+			 */
+			const SAVE_INTERVAL_MS = 500;
+			let lastSaveAt = 0;
+			let savedLength = -1;
+
+			const saveProgress = async (force = false) => {
+				if (!job.saveToChat || content.length === savedLength) return;
+				const at = Date.now();
+				if (!force && at - lastSaveAt < SAVE_INTERVAL_MS) return;
+				lastSaveAt = at;
+				savedLength = content.length;
+				await upsertMessage(env, job.chatId, job.messageId, { content }).catch((error) =>
+					console.warn('[open-webui] could not save the answer so far:', error)
+				);
+			};
+
 			const pushDelta = async (delta: string, opensBlock = false) => {
 				// The reasoning block asks for a blank line before it; at the very
 				// start of a message there is nothing to separate it from.
 				if (!content) delta = delta.replace(/^\n+/, '');
 				if (!delta) return;
 				content += delta;
+				await saveProgress();
 				// A delta is cheaper, and correct for everything except an open
 				// reasoning block, where the frontend has nothing to render it into.
 				if (reasoning.open) {
@@ -803,6 +848,7 @@ export async function runCompletion(
 				const pending = toolCallAccumulator();
 				try {
 					for await (const chunk of streamUpstream(env, roundRequest)) {
+						if (signal?.aborted) break;
 						if (chunk.usage) usage = chunk.usage;
 						if (chunk.toolCalls) pending.push(chunk.toolCalls);
 						if (chunk.reasoning) {
@@ -838,6 +884,9 @@ export async function runCompletion(
 
 				const calls = pending.calls();
 				if (!calls.length) break;
+				// Stopped mid-turn: the tools the model asked for are not run, and no
+				// further round is started.
+				if (signal?.aborted) break;
 
 				// The model's own turn has to go back verbatim, tool calls included,
 				// or the follow-up messages have nothing to answer.

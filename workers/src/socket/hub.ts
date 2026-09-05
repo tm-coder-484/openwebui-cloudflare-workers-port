@@ -47,6 +47,15 @@ export class SocketHub implements DurableObject {
 	private sessions = new Map<string, Session>();
 	private rooms = new Map<string, Set<string>>();
 	private usage = new Map<string, Map<string, number>>();
+	/**
+	 * The turns running right now, by task id.
+	 *
+	 * This object is the one that runs them, so it is the only place that knows.
+	 * Keeping it here rather than in a table means there is nothing to clean up
+	 * and nothing to go stale: if the object is gone the turns are gone with it,
+	 * which is the true answer.
+	 */
+	private running = new Map<string, { chatId: string; userId: string; stop: AbortController }>();
 	private docUpdates = new Map<string, unknown[]>();
 	private pinging = false;
 
@@ -81,6 +90,36 @@ export class SocketHub implements DurableObject {
 			// immediately while tokens keep flowing over the socket.
 			this.startCompletion(job);
 			return Response.json({ status: true, task_id: job.taskId });
+		}
+
+		// Which turns are still running for a chat. The frontend asks after a
+		// reload: an answer of "none" means the turn finished while the page was
+		// away and the chat should be reloaded to pick up its ending.
+		if (url.pathname === '/tasks') {
+			const chatId = url.searchParams.get('chat_id');
+			const userId = url.searchParams.get('user_id');
+			const taskIds = [...this.running.entries()]
+				.filter(([, task]) => task.chatId === chatId && task.userId === userId)
+				.map(([taskId]) => taskId);
+			return Response.json({ task_ids: taskIds });
+		}
+
+		// Stop a turn: by task id, or every turn of one chat, which is what the
+		// Stop button sends. Only the user who started it may stop it.
+		if (url.pathname === '/tasks/stop' && request.method === 'POST') {
+			const { taskId, chatId, userId } = (await request.json()) as {
+				taskId?: string;
+				chatId?: string;
+				userId: string;
+			};
+			const stopped: string[] = [];
+			for (const [id, task] of this.running) {
+				if (task.userId !== userId) continue;
+				if (taskId ? id !== taskId : task.chatId !== chatId) continue;
+				task.stop.abort();
+				stopped.push(id);
+			}
+			return Response.json({ task_ids: stopped });
 		}
 
 		if (url.pathname === '/stats') {
@@ -392,9 +431,20 @@ export class SocketHub implements DurableObject {
 	}
 
 	private startCompletion(job: CompletionJob): void {
-		const promise = runCompletion(this.env, job, (event) => {
-			this.emitToRoom(`user:${job.userId}`, 'events', [event]);
-		}).catch((error) => console.error('[open-webui] completion job failed', error));
+		const stop = new AbortController();
+		this.running.set(job.taskId, { chatId: job.chatId, userId: job.userId, stop });
+		const promise = runCompletion(
+			this.env,
+			job,
+			(event) => {
+				this.emitToRoom(`user:${job.userId}`, 'events', [event]);
+			},
+			stop.signal
+		)
+			.catch((error) => console.error('[open-webui] completion job failed', error))
+			// A failed turn is a finished turn: leaving it registered would tell a
+			// reloading page to wait for tokens that are never coming.
+			.finally(() => this.running.delete(job.taskId));
 		// Keeping the promise on the state extends the object's lifetime until
 		// the stream finishes, even if every socket disconnects mid-flight.
 		this.state.waitUntil?.(promise);
