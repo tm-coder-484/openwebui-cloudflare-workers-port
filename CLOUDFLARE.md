@@ -580,6 +580,13 @@ filesystem and no command execution anywhere in this port.
 | Files  | `list_files`, `read_file`, `create_file`, `edit_file` | `tools.files.enable`  |
 | Search | `glob_files`, `grep_files`, `search_chats`            | `tools.search.enable` |
 
+A turn allows **three rounds of tool calls** before the model has to answer —
+enough for search, read a result, search again. Raise it with `tools.max_rounds`
+for longer chains; file work in particular can want more, since glob, grep, read
+and edit are four rounds on their own. The value is clamped to 1-20 rather than
+trusted: a round is a whole model call plus its tool work, so an unbounded value
+is a turn that never ends and a bill to match.
+
 All default to on, and are switched through the config API
 (`POST /api/v1/configs/...`) rather than a settings screen. They do **not**
 require web search to be enabled for the turn — the search mode governs the

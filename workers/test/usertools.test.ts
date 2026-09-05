@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FILE_TOOLS, MEMORY_TOOLS, SEARCH_TOOLS, runToolCall, toolsFor } from '../src/lib/tools';
 import { globToRegExp } from '../src/lib/workspace';
+import { toolRounds } from '../src/lib/completions';
 
 /**
  * A D1 + R2 stub backed by plain arrays, enough for the memory and file tools.
@@ -438,5 +439,26 @@ describe('read_file ranges', () => {
 		expect(out.content).toContain('12\tline 12');
 		expect(out.content).not.toContain('13\tline 13');
 		expect(out.status).toContain('lines 10-12 of 50');
+	});
+});
+
+describe('the tool round cap', () => {
+	it('defaults to three when unset or nonsense', () => {
+		expect(toolRounds(undefined)).toBe(3);
+		expect(toolRounds(null)).toBe(3);
+		expect(toolRounds('not a number')).toBe(3);
+	});
+
+	it('takes a configured value', () => {
+		expect(toolRounds(1)).toBe(1);
+		expect(toolRounds(8)).toBe(8);
+		expect(toolRounds('6')).toBe(6);
+	});
+
+	it('clamps rather than trusting: a round is a whole model call', () => {
+		expect(toolRounds(0)).toBe(1);
+		expect(toolRounds(-5)).toBe(1);
+		expect(toolRounds(500)).toBe(20);
+		expect(toolRounds(3.9)).toBe(3);
 	});
 });

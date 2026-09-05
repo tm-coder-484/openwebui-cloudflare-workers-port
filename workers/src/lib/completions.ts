@@ -36,9 +36,27 @@ import { HttpError, now, toJSON } from './util';
  *
  * Three is enough for search → read a result → search again with what it
  * learned, which is the pattern worth supporting; beyond that a model is
- * usually stuck rather than working.
+ * usually stuck rather than working. Raise it with `tools.max_rounds` for
+ * longer chains — file work in particular can want more, since glob, grep,
+ * read and edit are four rounds on their own.
+ *
+ * Clamped rather than trusted: a round is a whole model call plus its tool
+ * work, so an unbounded value is a turn that never ends and a bill to match.
  */
-const MAX_TOOL_ROUNDS = 3;
+const DEFAULT_TOOL_ROUNDS = 3;
+const MAX_TOOL_ROUNDS_LIMIT = 20;
+
+export function toolRounds(configured: unknown): number {
+	// `null` is what an unset config row reads as, and Number(null) is 0 — which
+	// would clamp to a single round and quietly disable multi-step tool use on
+	// any deployment that had never set the key.
+	if (configured === null || configured === undefined || configured === '') {
+		return DEFAULT_TOOL_ROUNDS;
+	}
+	const value = Number(configured);
+	if (!Number.isFinite(value)) return DEFAULT_TOOL_ROUNDS;
+	return Math.min(Math.max(Math.floor(value), 1), MAX_TOOL_ROUNDS_LIMIT);
+}
 
 /** OpenAI sampling parameters we forward; everything else is Open WebUI's own. */
 const FORWARDED_PARAMS = new Set([
@@ -527,8 +545,10 @@ export async function runCompletion(
 		const toolConfig = await getConfigMany(env, [
 			'tools.memory.enable',
 			'tools.files.enable',
-			'tools.search.enable'
+			'tools.search.enable',
+			'tools.max_rounds'
 		]);
+		const maxToolRounds = toolRounds(toolConfig['tools.max_rounds']);
 		const tools = canCallTools
 			? toolsFor({
 					web: plan.tools,
@@ -604,7 +624,7 @@ export async function runCompletion(
 					payload: {
 						...request.payload,
 						messages,
-						...(useTools && round < MAX_TOOL_ROUNDS ? { tools, tool_choice: 'auto' } : {})
+						...(useTools && round < maxToolRounds ? { tools, tool_choice: 'auto' } : {})
 					}
 				};
 

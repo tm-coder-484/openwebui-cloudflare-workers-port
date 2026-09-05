@@ -146,6 +146,8 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'tools.memory.enable': true,
 	'tools.files.enable': true,
 	'tools.search.enable': true,
+	// Tool rounds per turn, clamped to 1-20 when read.
+	'tools.max_rounds': 3,
 	'chat.tool_permissions.enable': false,
 
 	'web.search.enable': false,
