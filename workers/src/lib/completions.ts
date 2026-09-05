@@ -18,6 +18,7 @@ import {
 	TAGS_GENERATION_PROMPT,
 	TITLE_GENERATION_PROMPT,
 	extractJSON,
+	stripThinking,
 	renderMessages
 } from './prompts';
 import { fullText, search } from './retrieval';
@@ -501,26 +502,35 @@ function toolCallBlock(call: ToolCall, result: string): string {
 /**
  * Accumulates `reasoning_content` into a collapsible block.
  *
- * The opening tag goes out with the first token and the closing tag when the
- * answer starts (or the stream ends), so the block streams live rather than
- * appearing all at once. It cannot carry a duration: the tag is already on the
- * wire by the time the model stops thinking, and the port never rewrites text
- * it has emitted.
+ * The block is opened `done="false"`, which is what makes the frontend show it
+ * as "Thinking..." with a spinner while it fills; `seal` rewrites that to
+ * `done="true"` with the elapsed seconds once the model stops, so it settles
+ * into "Thought for 12 seconds". The rewrite is possible because a message
+ * carrying an open block is sent whole rather than as a delta — see
+ * `emitMessage` below for why it has to be.
  */
+const REASONING_OPEN = '<details type="reasoning" done="false">';
+
 function openReasoningBlock() {
 	let open = false;
+	let startedAt = 0;
 
 	return {
+		/** Whether a block is currently open, and therefore unterminated. */
+		get open() {
+			return open;
+		},
 		/** The text to append for this reasoning delta. */
 		push(text: string): string {
 			if (open) return text;
 			open = true;
+			startedAt = Date.now();
 			// The frontend tokenises `<details>` with a block-anchored pattern, so a
 			// tag glued onto the end of the previous line is parsed as inline HTML
 			// and renders as nothing. That is invisible for the first block, which
 			// starts the message, and breaks every later one — a model that thinks
 			// again after answering.
-			return `\n\n<details type="reasoning">\n<summary>Thinking</summary>\n${text}`;
+			return `\n\n${REASONING_OPEN}\n<summary>Thinking</summary>\n${text}`;
 		},
 		/** The text that closes the block, or '' when none is open. */
 		close(): string {
@@ -529,6 +539,22 @@ function openReasoningBlock() {
 			// The blank line after </details> does the same job for whatever the
 			// model says next.
 			return '\n</details>\n\n';
+		},
+		/**
+		 * Marks the block just closed as finished, with how long it took.
+		 *
+		 * The last unsealed tag is the one that closed: earlier blocks in the same
+		 * message were sealed when they closed, so only one can ever match.
+		 */
+		seal(message: string): string {
+			const at = message.lastIndexOf(REASONING_OPEN);
+			if (at === -1) return message;
+			const seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+			return (
+				message.slice(0, at) +
+				`<details type="reasoning" done="true" duration="${seconds}">` +
+				message.slice(at + REASONING_OPEN.length)
+			);
 		}
 	};
 }
@@ -642,17 +668,58 @@ export async function runCompletion(
 			// in the message text, so the thinking is wrapped into one as it
 			// arrives, then closed when the answer proper starts.
 			const reasoning = openReasoningBlock();
+
+			/**
+			 * Sends the whole message rather than the piece that just arrived.
+			 *
+			 * The frontend's `<details>` tokeniser needs the closing tag before it
+			 * will produce a block at all, so an open one renders as nothing — the
+			 * thinking appeared only once the model had finished thinking, which is
+			 * the least useful moment for it. Sending the message with a
+			 * provisional `</details>` on the end makes the block appear with the
+			 * first token and fill in live; the real closing tag replaces it when
+			 * the model stops. This is the `content` field the frontend assigns
+			 * straight to the message, so it also lets the opening tag be rewritten
+			 * afterwards with how long the thinking took.
+			 */
+			const emitMessage = () =>
+				emitCompletion({
+					id: job.messageId,
+					content: reasoning.open ? `${content}\n</details>` : content,
+					done: false
+				});
+
 			const pushDelta = async (delta: string) => {
 				// The reasoning block asks for a blank line before it; at the very
 				// start of a message there is nothing to separate it from.
 				if (!content) delta = delta.replace(/^\n+/, '');
 				if (!delta) return;
 				content += delta;
+				// A delta is cheaper, and correct for everything except an open
+				// reasoning block, where the frontend has nothing to render it into.
+				if (reasoning.open) {
+					await emitMessage();
+					return;
+				}
 				await emitCompletion({
 					id: job.messageId,
 					choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
 					done: false
 				});
+			};
+
+			/**
+			 * Ends the open reasoning block, if there is one.
+			 *
+			 * Both the closing tag and the duration change text already on the
+			 * wire, so the message goes out whole once more; after that the stream
+			 * is back to deltas, appended to exactly this text.
+			 */
+			const closeReasoning = async () => {
+				const trailing = reasoning.close();
+				if (!trailing) return;
+				content = reasoning.seal(content + trailing);
+				await emitMessage();
 			};
 
 			// Each round is one model turn. A turn that ends in tool calls is run,
@@ -676,7 +743,10 @@ export async function runCompletion(
 						if (chunk.usage) usage = chunk.usage;
 						if (chunk.toolCalls) pending.push(chunk.toolCalls);
 						if (chunk.reasoning) await pushDelta(reasoning.push(chunk.reasoning));
-						if (chunk.content) await pushDelta(reasoning.close() + chunk.content);
+						if (chunk.content) {
+							await closeReasoning();
+							await pushDelta(chunk.content);
+						}
 					}
 				} catch (error) {
 					// Not every model accepts `tools`. Rather than failing the message,
@@ -771,8 +841,7 @@ export async function runCompletion(
 			}
 
 			// A model that only ever produced reasoning still needs its block shut.
-			const trailing = reasoning.close();
-			if (trailing) await pushDelta(trailing);
+			await closeReasoning();
 		} else {
 			const result = await callUpstream(env, request);
 			content = result.content;
@@ -925,7 +994,7 @@ export async function generateSearchQueries(
 
 	try {
 		const reply = await generateText(env, model, [{ role: 'user', content: prompt }], {
-			maxTokens: 200
+			maxTokens: TASK_TOKENS
 		});
 		const queries = parseQueries(reply);
 		return queries.length ? queries.slice(0, 3) : [fallback];
@@ -935,25 +1004,26 @@ export async function generateSearchQueries(
 	}
 }
 
-/** Pulls a query list out of a reply that may or may not be clean JSON. */
+/**
+ * Pulls a query list out of a reply that may or may not be clean JSON.
+ *
+ * A reasoning model drafts the JSON while it thinks, so both readings below
+ * work on the answer with the thinking removed: a greedy `{…}` match would
+ * otherwise span the draft and the answer, and the line fallback would take the
+ * first line of the thought as the search query.
+ */
 export function parseQueries(reply: string): string[] {
-	const match = reply.match(/\{[\s\S]*\}/);
-	if (match) {
-		try {
-			const parsed = JSON.parse(match[0]);
-			if (Array.isArray(parsed?.queries)) {
-				return parsed.queries.map((q: unknown) => String(q).trim()).filter(Boolean);
-			}
-		} catch {
-			/* fall through to the line-based reading */
-		}
+	const parsed = extractJSON<{ queries?: unknown }>(reply, 'queries');
+	if (Array.isArray(parsed?.queries)) {
+		const queries = parsed.queries.map((q: unknown) => String(q).trim()).filter(Boolean);
+		if (queries.length) return queries;
 	}
 	// A model that ignored the format at least tends to put the query on its
 	// own line; anything longer than a search query is not one.
-	const line = reply
+	const line = stripThinking(reply)
 		.split('\n')
 		.map((entry) => entry.replace(/^[-*\d.\s"']+|["']+$/g, '').trim())
-		.find((entry) => entry.length > 0 && entry.length < 200);
+		.find((entry) => entry.length > 0 && entry.length < 200 && !/[{}]/.test(entry));
 	return line ? [line] : [];
 }
 
@@ -1246,6 +1316,15 @@ export async function taskModelId(env: Env, fallbackModelId: string): Promise<st
 	return configured || fallbackModelId;
 }
 
+/**
+ * How much room a background task answer gets.
+ *
+ * A reasoning model spends this on thinking before it answers, so the old
+ * ceiling of 100 tokens for a title bought a truncated thought and no JSON.
+ * These tasks ask for a handful of words either way.
+ */
+const TASK_TOKENS = 1200;
+
 async function runBackgroundTasks(
 	env: Env,
 	job: CompletionJob,
@@ -1271,9 +1350,9 @@ async function runBackgroundTasks(
 		try {
 			const prompt = TITLE_GENERATION_PROMPT.replace('{{MESSAGES}}', renderMessages(history, 2));
 			const raw = await generateText(env, model, [{ role: 'user', content: prompt }], {
-				maxTokens: 100
+				maxTokens: TASK_TOKENS
 			});
-			const title = extractJSON<{ title?: string }>(raw)?.title?.trim();
+			const title = extractJSON<{ title?: string }>(raw, 'title')?.title?.trim();
 			if (title) {
 				await setChatTitle(env, job.chatId, title);
 				await emit({
@@ -1291,9 +1370,9 @@ async function runBackgroundTasks(
 		try {
 			const prompt = TAGS_GENERATION_PROMPT.replace('{{MESSAGES}}', renderMessages(history, 6));
 			const raw = await generateText(env, model, [{ role: 'user', content: prompt }], {
-				maxTokens: 200
+				maxTokens: TASK_TOKENS
 			});
-			const tags = extractJSON<{ tags?: string[] }>(raw)?.tags;
+			const tags = extractJSON<{ tags?: string[] }>(raw, 'tags')?.tags;
 			if (Array.isArray(tags) && tags.length) {
 				await setChatTags(env, job.chatId, job.userId, tags.slice(0, 6).map(String));
 				await emit({
@@ -1314,9 +1393,9 @@ async function runBackgroundTasks(
 				renderMessages(history, 6)
 			);
 			const raw = await generateText(env, model, [{ role: 'user', content: prompt }], {
-				maxTokens: 300
+				maxTokens: TASK_TOKENS
 			});
-			const followUps = extractJSON<{ follow_ups?: string[] }>(raw)?.follow_ups;
+			const followUps = extractJSON<{ follow_ups?: string[] }>(raw, 'follow_ups')?.follow_ups;
 			if (Array.isArray(followUps) && followUps.length) {
 				await upsertMessage(env, job.chatId, job.messageId, { followUps });
 				await emit({

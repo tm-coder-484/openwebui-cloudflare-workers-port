@@ -725,12 +725,14 @@ if (models.data?.some((model) => model.id === 'mock-tools')) {
 }
 
 if (models.data?.some((model) => model.id === 'mock-reasoner')) {
-	await check('a model that thinks twice gets two blocks, both renderable', async () => {
+	/** One turn from the reasoning model, with every step of the stream kept. */
+	const reasoningTurn = async () => {
 		const socket = await connectSocket(token);
 		try {
 			socket.resetEvents();
 			const messageId = crypto.randomUUID();
-			const done = socket.waitFor(messageId);
+			const snapshots = [];
+			const done = socket.waitFor(messageId, snapshots);
 			await api('/api/chat/completions', {
 				method: 'POST',
 				body: JSON.stringify({
@@ -750,24 +752,80 @@ if (models.data?.some((model) => model.id === 'mock-reasoner')) {
 					background_tasks: {}
 				})
 			});
-			const content = await done;
-
-			const opens = [...content.matchAll(/<details type="reasoning">/g)].map((m) => m.index);
-			assert(opens.length === 2, `expected two reasoning blocks, got ${opens.length}`);
-			assert(
-				content.startsWith('<details type="reasoning">'),
-				`the first block does not start the message: ${JSON.stringify(content.slice(0, 40))}`
-			);
-			assert(
-				content.slice(opens[1] - 2, opens[1]) === '\n\n',
-				`the second block does not start a markdown block: ${JSON.stringify(
-					content.slice(opens[1] - 30, opens[1] + 30)
-				)}`
-			);
-			assert((content.match(/<\/details>/g) ?? []).length === 2, 'a reasoning block was left open');
+			return { content: await done, snapshots };
 		} finally {
 			socket.close();
 		}
+	};
+
+	// A block renders only once its closing tag has arrived: the frontend's
+	// tokeniser gives up on an unterminated <details> and emits nothing.
+	const rendersAsBlock = (text) => {
+		const opens = (text.match(/<details type="reasoning"/g) ?? []).length;
+		return opens > 0 && (text.match(/<\/details>/g) ?? []).length >= opens;
+	};
+
+	await check('a model that thinks twice gets two blocks, both renderable', async () => {
+		const { content } = await reasoningTurn();
+
+		const opens = [...content.matchAll(/<details type="reasoning"/g)].map((m) => m.index);
+		assert(opens.length === 2, `expected two reasoning blocks, got ${opens.length}`);
+		assert(
+			content.startsWith('<details type="reasoning"'),
+			`the first block does not start the message: ${JSON.stringify(content.slice(0, 40))}`
+		);
+		assert(
+			content.slice(opens[1] - 2, opens[1]) === '\n\n',
+			`the second block does not start a markdown block: ${JSON.stringify(
+				content.slice(opens[1] - 30, opens[1] + 30)
+			)}`
+		);
+		assert((content.match(/<\/details>/g) ?? []).length === 2, 'a reasoning block was left open');
+	});
+
+	await check('thinking is on screen while it happens, not only once it ends', async () => {
+		const { content, snapshots } = await reasoningTurn();
+
+		// The bug: every snapshot up to the end of the thought had an open block,
+		// which renders as nothing, so the thinking appeared all at once when the
+		// model had already finished it.
+		const live = snapshots.filter((text) => text.includes('done="false"') && rendersAsBlock(text));
+		assert(
+			live.length >= 2,
+			`the thinking was never renderable mid-stream: ${live.length} of ${snapshots.length} snapshots`
+		);
+		// It has to grow, or it is one block sent twice rather than a live one.
+		assert(live.at(-1).length > live[0].length, 'the block never grew while it was open');
+		assert(
+			snapshots.some((text) => /duration="\d+"/.test(text)),
+			'the finished block never got a duration'
+		);
+		assert(
+			!content.includes('done="false"'),
+			'a reasoning block was left marked unfinished in the saved message'
+		);
+	});
+
+	await check('a reasoning model still gets a usable title', async () => {
+		// The task budget is spent on thinking first, and a model reasoning about
+		// JSON writes JSON while it reasons — so a truncated thought left no JSON
+		// at all, and an untruncated one left several for the parser to trip on.
+		const res = await api('/api/v1/tasks/title/completions', {
+			method: 'POST',
+			body: JSON.stringify({
+				model: 'mock-reasoner',
+				messages: [{ role: 'user', content: 'how do I deploy this to cloudflare' }]
+			})
+		});
+		const answer = res?.choices?.[0]?.message?.content ?? '';
+		assert(!/<think/i.test(answer), `the thinking leaked into the answer: ${answer.slice(0, 80)}`);
+
+		// Parsed the way the frontend parses it, first brace to last.
+		const start = answer.indexOf('{');
+		const end = answer.lastIndexOf('}');
+		assert(start !== -1 && end > start, `no JSON in the title answer: ${answer.slice(0, 120)}`);
+		const title = JSON.parse(answer.slice(start, end + 1))?.title;
+		assert(title && String(title).trim().length > 0, `no title came back: ${answer.slice(0, 120)}`);
 	});
 }
 
@@ -1474,7 +1532,12 @@ async function connectSocket(authToken) {
 			sourceDocs.length = 0;
 			sources = 0;
 		},
-		waitFor(messageId) {
+		/**
+		 * Resolves with the finished message, and records what the message looked
+		 * like at every step along the way — which is the only way to check that
+		 * something was on screen *while* it streamed rather than only at the end.
+		 */
+		waitFor(messageId, snapshots) {
 			return new Promise((resolve, reject) => {
 				let content = '';
 				const timer = setTimeout(() => reject(new Error('stream timed out')), 60000);
@@ -1483,6 +1546,12 @@ async function connectSocket(authToken) {
 					if (event?.type !== 'chat:completion') return;
 					const delta = event.data?.choices?.[0]?.delta?.content;
 					if (delta) content += delta;
+					// While a reasoning block is open the server sends the whole
+					// message instead of a delta, because the frontend cannot render
+					// an unterminated <details>. Mirror what the frontend does with
+					// it, or this harness would see a different message than a user.
+					if (event.data?.content) content = event.data.content;
+					if (snapshots && (delta || event.data?.content)) snapshots.push(content);
 					if (event.data?.error) {
 						clearTimeout(timer);
 						reject(new Error(JSON.stringify(event.data.error).slice(0, 200)));

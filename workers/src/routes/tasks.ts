@@ -10,7 +10,8 @@ import {
 	TAGS_GENERATION_PROMPT,
 	TITLE_GENERATION_PROMPT,
 	extractJSON,
-	renderMessages
+	renderMessages,
+	stripThinking
 } from '../lib/prompts';
 import { bad } from '../lib/util';
 
@@ -50,6 +51,65 @@ app.post('/config/update', async (c) => {
 	return c.json(out);
 });
 
+/**
+ * How much room a task answer gets.
+ *
+ * A reasoning model spends this budget on thinking first and only then on the
+ * answer, so the old ceiling of 100 tokens for a title bought a truncated
+ * thought and no JSON at all — which is what "title generation is unreliable
+ * with reasoning models" looks like from here. The tasks ask for a handful of
+ * words, so a ceiling this high costs nothing when the model does not think and
+ * is the difference between an answer and none when it does.
+ */
+const TASK_TOKENS = 1200;
+
+/**
+ * Rewrites a task answer as the JSON the frontend expects, and nothing else.
+ *
+ * Each caller parses the answer by scanning for the first `{` and the last `}`.
+ * A reasoning model reasoning about JSON writes JSON while it reasons, so that
+ * span covers the draft, the prose between and the real answer, and the parse
+ * throws. Rather than fix that scan in five places in the frontend, the answer
+ * that leaves here is reduced to the object it was asked for.
+ *
+ * A model that ignored the format entirely still gets a chance: `salvage` turns
+ * a plain answer into the same shape, so a bare title is used rather than
+ * discarded. When there is nothing usable the original text goes back
+ * unchanged, and the caller's own parser decides — this only ever narrows.
+ */
+function asTaskJSON(
+	raw: string,
+	wanted: string,
+	salvage?: (text: string) => unknown | null
+): string {
+	const parsed = extractJSON<Record<string, unknown>>(raw, wanted);
+	const value = parsed?.[wanted];
+	if (value !== undefined && value !== null && value !== '') {
+		return JSON.stringify({ [wanted]: value });
+	}
+	const rescued = salvage?.(stripThinking(raw));
+	if (rescued !== undefined && rescued !== null && rescued !== '') {
+		return JSON.stringify({ [wanted]: rescued });
+	}
+	return raw;
+}
+
+/**
+ * A title from an answer that is not JSON at all.
+ *
+ * Accepts only what a title plausibly is — one short line, no braces, no
+ * markdown — so a refusal or an apology is left to fail rather than becoming
+ * the name of the chat.
+ */
+function titleFromProse(text: string): string | null {
+	const line = text
+		.split('\n')
+		.map((part) => part.trim().replace(/^["'`#*\s-]+|["'`\s]+$/g, ''))
+		.find((part) => part.length > 0);
+	if (!line || line.length > 80 || /[{}<>|]/.test(line)) return null;
+	return line;
+}
+
 /** Wraps generated text in the OpenAI response envelope the UI parses. */
 const completionEnvelope = (model: string, content: string) => ({
 	id: `task-${Date.now()}`,
@@ -65,9 +125,13 @@ async function runTask(c: any, prompt: string, maxTokens = 300) {
 	if (!body.model) throw bad('Model is required');
 	const model = await taskModelId(c.env, body.model);
 	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
-		maxTokens
+		// A reasoning model needs room to think before it answers; the caller's
+		// number is what the answer itself needs, which is the smaller half.
+		maxTokens: Math.max(maxTokens, TASK_TOKENS)
 	});
-	return c.json(completionEnvelope(model, content));
+	// An emoji or a completion is used as-is, so a leaked thought would be shown
+	// to the user verbatim.
+	return c.json(completionEnvelope(model, stripThinking(content)));
 }
 
 app.post('/title/completions', async (c) => {
@@ -79,10 +143,10 @@ app.post('/title/completions', async (c) => {
 		'{{MESSAGES}}',
 		renderMessages(body.messages ?? [], 2)
 	);
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
-		maxTokens: 100
+	const raw = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens: TASK_TOKENS
 	});
-	return c.json(completionEnvelope(model, content));
+	return c.json(completionEnvelope(model, asTaskJSON(raw, 'title', titleFromProse)));
 });
 
 app.post('/tags/completions', async (c) => {
@@ -94,10 +158,10 @@ app.post('/tags/completions', async (c) => {
 		'{{MESSAGES}}',
 		renderMessages(body.messages ?? [], 6)
 	);
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
-		maxTokens: 200
+	const raw = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens: TASK_TOKENS
 	});
-	return c.json(completionEnvelope(model, content));
+	return c.json(completionEnvelope(model, asTaskJSON(raw, 'tags')));
 });
 
 app.post('/follow_up/completions', async (c) => {
@@ -109,10 +173,10 @@ app.post('/follow_up/completions', async (c) => {
 		'{{MESSAGES}}',
 		renderMessages(body.messages ?? [], 6)
 	);
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
-		maxTokens: 300
+	const raw = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens: TASK_TOKENS
 	});
-	return c.json(completionEnvelope(model, content));
+	return c.json(completionEnvelope(model, asTaskJSON(raw, 'follow_ups')));
 });
 
 app.post('/queries/completions', async (c) => {
@@ -124,10 +188,10 @@ app.post('/queries/completions', async (c) => {
 		'Given the conversation below, produce up to 3 concise web-search queries that would help answer ' +
 		'the final user message. Respond with JSON only: { "queries": ["query 1", "query 2"] }\n\n' +
 		renderMessages(body.messages ?? [], 6);
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
-		maxTokens: 200
+	const raw = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens: TASK_TOKENS
 	});
-	return c.json(completionEnvelope(model, content));
+	return c.json(completionEnvelope(model, asTaskJSON(raw, 'queries')));
 });
 
 app.post('/emoji/completions', async (c) =>
@@ -142,10 +206,10 @@ app.post('/auto/completions', async (c) => {
 	const prompt =
 		'Continue the following text naturally with at most one sentence. Respond with JSON only: ' +
 		`{ "text": "..." }\n\n${body.prompt ?? ''}`;
-	const content = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
-		maxTokens: 100
+	const raw = await generateText(c.env, model, [{ role: 'user', content: prompt }], {
+		maxTokens: TASK_TOKENS
 	});
-	return c.json(completionEnvelope(model, content));
+	return c.json(completionEnvelope(model, asTaskJSON(raw, 'text')));
 });
 
 app.post('/moa/completions', async (c) =>
