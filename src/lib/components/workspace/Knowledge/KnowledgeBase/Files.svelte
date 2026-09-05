@@ -46,6 +46,8 @@
 	export let directories = [];
 
 	export let onClick: (fileId: string | undefined) => void = () => {};
+	/** Opens the extracted text for editing — what a click used to do. */
+	export let onEditText: (fileId: string | undefined) => void = () => {};
 	export let onDelete: (fileId: string | undefined) => void = () => {};
 	export let onRename: (fileId: string, name: string) => void = () => {};
 	export let onNavigateDirectory: (directoryId: string) => void = () => {};
@@ -216,6 +218,16 @@
 								>
 									<Pencil className="size-3.5" />
 									{$i18n.t('Rename')}
+								</button>
+								<button
+									type="button"
+									class="select-none flex h-[1.6875rem] w-full cursor-pointer items-center gap-2 rounded-xl bg-transparent px-2 text-xs transition hover:text-gray-900 dark:hover:text-gray-100"
+									on:click={() => {
+										onEditText(file?.id ?? file?.tempId);
+									}}
+								>
+									<DocumentPage className="size-3.5" />
+									{$i18n.t('Edit Text')}
 								</button>
 								<button
 									type="button"

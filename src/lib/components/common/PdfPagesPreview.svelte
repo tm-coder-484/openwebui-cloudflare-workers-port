@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick } from 'svelte';
+	import '$lib/utils/pdfPolyfill';
 	import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 	import Spinner from './Spinner.svelte';
 	import PDFViewer from './PDFViewer.svelte';
