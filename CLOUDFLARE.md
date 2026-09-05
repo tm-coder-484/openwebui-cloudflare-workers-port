@@ -71,6 +71,20 @@ its own provider so it stays the primary option:
 The Worker builds and deploys straight from a GitHub repository, so a
 deployment needs nothing installed locally.
 
+**0. Enable R2 on your Cloudflare account.** Dashboard → **R2 Object
+Storage** → work through the enable screen. Unlike D1 and KV, R2 needs a
+one-time opt-in with a payment method on file before anything can create a
+bucket, so it is the one resource the deploy cannot provision for you. Skip
+this and the deploy fails at the very last step, after the whole frontend has
+built and every asset has uploaded, with:
+
+```
+✘ [ERROR] A request to the Cloudflare API (/accounts/…/r2/buckets/open-webui-files) failed.
+  Please enable R2 through the Cloudflare Dashboard. [code: 10042]
+```
+
+Thirty seconds here saves a full build cycle.
+
 **1. Get the code onto your own GitHub account.** Fork this repository, or push
 a clone to a new repo of your own. Cloudflare needs read access to it.
 
@@ -84,15 +98,20 @@ the flow that builds a Worker from Git, not the "upload assets" one.)
 | Setting        | Value                                                        |
 | -------------- | ------------------------------------------------------------ |
 | Build command  | `npm ci && npm run build:workers && npm --prefix workers ci` |
-| Deploy command | `npx wrangler deploy --config workers/wrangler.toml`         |
+| Deploy command | `cd workers && npx wrangler deploy`                          |
 | Root directory | leave as the repository root                                 |
 
 The build command builds the SvelteKit frontend into `./build` (which
 `wrangler.toml` serves as static assets) and then installs the Worker's own
-dependencies. Both commands run from the repository root, which is why the
-deploy command needs `--config` — the Worker's config lives in `workers/`, and
-paths inside it resolve relative to itself. Leave the root directory alone:
-`build:workers` is a root-level script and needs the root `package.json`.
+dependencies. Leave the root directory alone: `build:workers` is a root-level
+script and needs the root `package.json`.
+
+The `cd workers` in the deploy command matters for more than finding the
+config. Run from the repository root, `npx wrangler` does not find the wrangler
+the build just installed into `workers/node_modules` and downloads a fresh copy
+instead — four wasted minutes, and what the clock ran out on the first time
+this was tried. Set the version command the same way:
+`cd workers && npx wrangler versions upload`.
 
 The Node version is pinned by the `.nvmrc` in the repository root. This matters:
 the root `.npmrc` sets `engine-strict=true` and `package.json` caps `engines` at
@@ -115,6 +134,18 @@ the container itself is too small and no flag will fix it. In that case build
 somewhere with more memory — a GitHub Actions runner, or your own machine with
 `npm run build:workers && npm --prefix workers run deploy` — and let Cloudflare
 serve the result.
+
+**Mind the build timeout.** Cloudflare installs dependencies for every
+ecosystem it detects before your build command runs, and `pyproject.toml` in
+the root makes it run `uv sync` — pulling the Python backend's entire ML stack,
+160 MB of CUDA libraries included, for a backend that never runs on Workers.
+In a real run that was ten minutes of a thirty-minute budget, against three
+minutes for the frontend build that actually matters. A
+`SKIP_DEPENDENCY_INSTALL` = `1` build variable turns it off (the build command
+above installs everything the Worker needs), but that section is not exposed in
+every dashboard. If you cannot set it, or the build times out anyway, use the
+GitHub Actions workflow below instead — it is the more reliable path for this
+repository.
 
 **4. Deploy.** The first build takes a few minutes — most of it is the frontend.
 
@@ -168,6 +199,35 @@ needs changing — see step 6.
 the administrator, so do this before sharing the URL with anyone.
 
 Redeploys are automatic on every push to the connected branch.
+
+---
+
+## Deploy from GitHub Actions (recommended)
+
+Cloudflare's build container struggles with this repository: the frontend needs
+around 4 GB of heap where the builder allows 2 GB, and the automatic `uv sync`
+described above eats a third of the build budget. A GitHub runner has 16 GB and
+no such detection, so `.github/workflows/workers-deploy.yaml` builds and deploys
+there instead, on every push to `main`. Cloudflare just serves the result.
+
+It also applies the D1 migrations before deploying, so the schema step below is
+handled for you.
+
+One-time setup, all in the browser:
+
+1. **Create a Cloudflare API token.** Cloudflare dashboard → **My Profile** →
+   **API Tokens** → **Create Token** → the **Edit Cloudflare Workers** template.
+   It needs to reach D1 as well, so add `D1:Edit` to the permissions before
+   creating it. Copy the token — it is shown once.
+2. **Find your account id.** It is in the dashboard URL, and on the Workers
+   overview page.
+3. **Add both to GitHub.** Repository → **Settings** → **Secrets and variables**
+   → **Actions** → **New repository secret**. Add `CLOUDFLARE_API_TOKEN` and
+   `CLOUDFLARE_ACCOUNT_ID`.
+
+Then push to `main`, or run the workflow by hand from the **Actions** tab. If
+you also connected the repository to Cloudflare's own builder, disconnect it
+first or both will race to deploy the same Worker.
 
 ---
 

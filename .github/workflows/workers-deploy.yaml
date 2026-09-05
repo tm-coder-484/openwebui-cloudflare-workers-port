@@ -1,0 +1,64 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Deploys the Worker on every push to main.
+#
+# This exists because Cloudflare's own build container cannot build this
+# repository: the frontend needs ~4 GB of heap where the builder allows 2 GB,
+# and Cloudflare installs every ecosystem it detects first — `pyproject.toml`
+# in the root makes it run `uv sync` and pull the Python backend's ML stack,
+# which alone spent a third of the 30-minute budget on a backend that never
+# runs on Workers. A GitHub runner has 16 GB and no such detection.
+#
+# One-time setup: add a Cloudflare API token as the CLOUDFLARE_API_TOKEN
+# repository secret, and your account id as CLOUDFLARE_ACCOUNT_ID.
+# ─────────────────────────────────────────────────────────────────────────────
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Worker dependencies
+        run: npm --prefix workers ci --no-audit --no-fund
+
+      # Builds the SvelteKit frontend into ./build, which wrangler.toml serves
+      # as static assets. Raises the heap and skips sourcemaps; see the script.
+      - name: Build the frontend
+        run: npm run build:workers
+
+      # Schema changes are applied before the code that expects them.
+      - name: Apply D1 migrations
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers
+          command: d1 migrations apply open-webui --remote
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers
+          command: deploy
