@@ -531,27 +531,40 @@ results, reports progress through the same `status` events as upstream, injects
 the pages as `<source>` context, and stores them as files so the answer carries
 citations.
 
-**Two search modes**, set by **Search Mode** under Admin Settings → Web Search
+**Three search modes**, set by **Search Mode** under Admin Settings → Web Search
 (`WEB_SEARCH_MODE`, or `web.search.mode`):
 
 | Mode               | What happens                                                                              |
 | ------------------ | ----------------------------------------------------------------------------------------- |
 | `always` (default) | One search before the model runs, on a query the task model writes from the conversation. |
 | `tool`             | The model is given `web_search` and `web_fetch` as functions and calls them itself.       |
+| `combo`            | Both: search first, and the model keeps the tools to search again.                        |
 
 `always` is predictable and costs one search per turn whether or not the
 question needs one. `tool` lets the model skip the search entirely when it
 already knows the answer, choose its own query, read a specific result with
 `web_fetch`, and search again with what it learned — up to three rounds, after
-which it has to answer. Both modes emit the same status and source events, so
-citations render identically.
+which it has to answer.
 
-`tool` mode needs a model that supports tool calling, and an OpenAI-compatible
-connection: the Workers AI binding has no tool-calling shape, so Workers AI
-models stay on `always`. If the endpoint rejects the request because the model
-cannot do tool calling, the turn does not fail — it falls back to searching
-first and asks again without tools, which is why this is safe to leave on for a
-mixed set of models.
+`combo` is the two together, and the mode to pick when you want search to be
+reliable rather than cheap: the model starts with pages already retrieved, so it
+answers immediately when they cover the question, and it still holds the tools
+for when they do not. `always` cannot do the second; `tool` pays a round trip
+before it has anything to read, and depends on the model choosing to search at
+all. The injected context says outright that the tools are still available, so
+"these pages do not answer it" leads to another search rather than an apology.
+Cost is the same one search per turn as `always`, plus whatever the model adds.
+
+All three modes emit the same status and source events, so citations render
+identically.
+
+`tool` and `combo` need a model that supports tool calling, and an
+OpenAI-compatible connection: the Workers AI binding has no tool-calling shape,
+so Workers AI models stay on `always`. If the endpoint rejects the request
+because the model cannot do tool calling, the turn does not fail — it falls back
+to searching first and asks again without tools, which is why these are safe to
+leave on for a mixed set of models. In `combo` that fallback costs nothing
+extra, since the search has already run.
 
 **Fetching one page.** Independently of search, `POST /api/v1/retrieval/process/web`
 with `{"url": "..."}` fetches a page, reduces it to text, stores it as a file

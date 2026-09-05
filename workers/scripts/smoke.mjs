@@ -660,6 +660,38 @@ if (isAdmin && searchMockUp && toolModels.includes('mock-tools')) {
 		);
 	});
 
+	await check('combo mode searches first and still leaves the model its tools', async () => {
+		await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({ web: { WEB_SEARCH_MODE: 'combo' } })
+		});
+		const turn = await runTurn('mock-tools', 'What is Cloudflare Workers?');
+
+		// The pre-search query comes from the task model; the tool query is the
+		// model's own. Both statuses prove combo did both things.
+		assert(
+			turn.statuses.some((line) => /Searching the web|Searched the web \(/.test(line)),
+			`no pre-search status: ${JSON.stringify(turn.statuses)}`
+		);
+		assert(
+			turn.statuses.some((line) => line.includes('cloudflare workers')),
+			`the model never got to call the tool: ${JSON.stringify(turn.statuses)}`
+		);
+		assert(turn.content.trim().length > 0, 'no answer was produced');
+	});
+
+	await check('combo mode does not search twice when the model refuses tools', async () => {
+		// The pre-search has already run by the time the endpoint rejects `tools`,
+		// so the fallback must not run it again.
+		const turn = await runTurn('mock-no-tools', 'What is Cloudflare Workers?');
+		const searches = turn.statuses.filter((line) => /^Searching the web for/.test(line));
+		assert(
+			searches.length === 1,
+			`expected one search, saw ${searches.length}: ${JSON.stringify(searches)}`
+		);
+		assert(turn.content.trim().length > 0, 'no answer was produced');
+	});
+
 	await check('put web search back into always mode', async () => {
 		const saved = await api('/api/v1/retrieval/config/update', {
 			method: 'POST',

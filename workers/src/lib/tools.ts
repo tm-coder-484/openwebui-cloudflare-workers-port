@@ -206,3 +206,32 @@ export function isToolsUnsupported(message: string): boolean {
 		/tool|function[_ ]?call/i.test(message) && /support|invalid|unknown|unrecogni/i.test(message)
 	);
 }
+
+export type SearchMode = 'always' | 'tool' | 'combo';
+
+export interface SearchPlan {
+	/** Search once before the model runs and inject the pages as context. */
+	preSearch: boolean;
+	/** Offer `web_search`/`web_fetch` to the model for this turn. */
+	tools: boolean;
+}
+
+/**
+ * What a turn should do about web search.
+ *
+ * Three modes, and the interesting one is `combo`: the model starts with pages
+ * already retrieved *and* keeps the tools, so it answers straight away when the
+ * pre-search covered the question and searches again when it did not. `always`
+ * cannot do the second, `tool` pays a round trip before it has anything to read.
+ *
+ * Tool calling needs an OpenAI-compatible endpoint — the Workers AI binding has
+ * no tool-calling shape — so a mode that asked for tools without them falls back
+ * to searching first rather than doing nothing.
+ */
+export function searchPlan(mode: string, enabled: boolean, canUseTools: boolean): SearchPlan {
+	if (!enabled) return { preSearch: false, tools: false };
+
+	const wantsTools = mode === 'tool' || mode === 'combo';
+	const tools = wantsTools && canUseTools;
+	return { preSearch: !tools || mode === 'combo', tools };
+}

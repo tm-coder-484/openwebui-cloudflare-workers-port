@@ -22,7 +22,13 @@ import {
 } from './prompts';
 import { fullText, search } from './retrieval';
 import { resultText, webSearch } from './websearch';
-import { WEB_TOOLS, isToolsUnsupported, runToolCall, toolCallAccumulator } from './tools';
+import {
+	WEB_TOOLS,
+	isToolsUnsupported,
+	runToolCall,
+	searchPlan,
+	toolCallAccumulator
+} from './tools';
 import { HttpError, now, toJSON } from './util';
 
 /**
@@ -507,17 +513,17 @@ export async function runCompletion(
 			job.body = { ...job.body, messages: [...requestMessages, ...history] };
 		}
 
-		// Web search has two modes. `always` searches once before the model runs,
-		// which is predictable and needs nothing of the model. `tool` hands it the
-		// search as a function it can choose to call, more than once if it wants —
-		// only possible on an OpenAI-compatible endpoint, since the Workers AI
-		// binding has no tool-calling shape.
+		// `always` searches once before the model runs; `tool` hands the search to
+		// the model as a function; `combo` does both, so it starts with pages in
+		// hand and can still search again for what they did not cover.
 		const webSearchOn = Boolean(job.body.features?.web_search);
 		const mode = String((await getConfig(env, 'web.search.mode')) ?? 'always');
-		let useTools = webSearchOn && mode === 'tool' && resolved.workersAI !== true;
+		const plan = searchPlan(mode, webSearchOn, resolved.workersAI !== true);
+		let useTools = plan.tools;
+		let preSearched = plan.preSearch;
 
-		if (webSearchOn && !useTools) {
-			await runWebSearch(env, job, emit);
+		if (plan.preSearch) {
+			await runWebSearch(env, job, emit, { toolsAvailable: plan.tools });
 		}
 
 		// Attached files and knowledge bases become a retrieved context block.
@@ -603,7 +609,12 @@ export async function runCompletion(
 						throw error;
 					console.warn('[open-webui] model rejected tools; searching before the turn instead');
 					useTools = false;
-					await runWebSearch(env, job, emit);
+					// In combo mode the pre-search has already run; searching again
+					// would duplicate its sources as well as its cost.
+					if (!preSearched) {
+						await runWebSearch(env, job, emit);
+						preSearched = true;
+					}
 					messages = buildUpstreamRequest(resolved, job.body, { stream }).payload
 						.messages as CompletionMessage[];
 					continue;
@@ -879,7 +890,12 @@ Strictly return in JSON format:
 {{MESSAGES:END:6}}
 </chat_history>`;
 
-async function runWebSearch(env: Env, job: CompletionJob, emit: EventEmitter): Promise<void> {
+async function runWebSearch(
+	env: Env,
+	job: CompletionJob,
+	emit: EventEmitter,
+	options: { toolsAvailable?: boolean } = {}
+): Promise<void> {
 	const messages = (job.body.messages ?? []) as CompletionMessage[];
 	const raw = lastUserText(messages);
 	if (!raw) return;
@@ -939,7 +955,13 @@ async function runWebSearch(env: Env, job: CompletionJob, emit: EventEmitter): P
 						role: 'system',
 						content:
 							'The following web pages were retrieved for this question. Use them to answer, ' +
-							`cite them inline as [id], and say so if they do not contain the answer.\n\n${parts.join('\n')}`
+							'cite them inline as [id], and say so if they do not contain the answer.' +
+							// In combo mode the model still holds the tools, so "they do not
+							// contain the answer" has a better ending than saying so.
+							(options.toolsAvailable
+								? ' If they do not cover it, call the web_search tool again with a better query.'
+								: '') +
+							`\n\n${parts.join('\n')}`
 					},
 					...messages
 				]
