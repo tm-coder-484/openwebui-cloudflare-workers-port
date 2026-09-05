@@ -14,7 +14,7 @@ const PORT = Number(process.env.MOCK_OPENAI_PORT ?? 11435);
 // `mock-reasoner` streams reasoning_content the way a thinking model does,
 // which is the case that used to render as an empty message.
 let busyOnceServed = false;
-const MODELS = ['mock-gpt', 'mock-gpt-mini', 'mock-reasoner'];
+const MODELS = ['mock-gpt', 'mock-gpt-mini', 'mock-reasoner', 'mock-tools', 'mock-no-tools'];
 
 const readBody = (req) =>
 	new Promise((resolve) => {
@@ -95,6 +95,81 @@ createServer(async (req, res) => {
 		}
 		if (process.env.MOCK_OPENAI_DEBUG) {
 			console.log('[mock] request body:', JSON.stringify(body).slice(0, 800));
+		}
+
+		// `mock-no-tools` stands in for a model whose endpoint rejects `tools`, so
+		// the fallback to searching before the turn can be exercised.
+		if (body.model === 'mock-no-tools' && body.tools) {
+			res.writeHead(400, { 'Content-Type': 'application/json' });
+			return res.end(JSON.stringify({ error: { message: 'This model does not support tools' } }));
+		}
+
+		// `mock-tools` calls web_search once, then answers from what came back.
+		// The arguments are split across chunks the way real providers stream them.
+		const alreadyRan = (body.messages ?? []).some((message) => message.role === 'tool');
+		if (body.model === 'mock-tools' && body.tools && !alreadyRan) {
+			const frames = [
+				{
+					index: 0,
+					id: 'call_mock_1',
+					type: 'function',
+					function: { name: 'web_search', arguments: '{"qu' }
+				},
+				{ index: 0, function: { arguments: 'ery":"cloud' } },
+				{ index: 0, function: { arguments: 'flare workers"}' } }
+			];
+			if (!body.stream) {
+				res.writeHead(200, { 'Content-Type': 'application/json' });
+				return res.end(
+					JSON.stringify({
+						id: 'mock-tool-1',
+						object: 'chat.completion',
+						model: body.model,
+						choices: [
+							{
+								index: 0,
+								message: {
+									role: 'assistant',
+									content: null,
+									tool_calls: [
+										{
+											id: 'call_mock_1',
+											type: 'function',
+											function: { name: 'web_search', arguments: '{"query":"cloudflare workers"}' }
+										}
+									]
+								},
+								finish_reason: 'tool_calls'
+							}
+						]
+					})
+				);
+			}
+			res.writeHead(200, {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				Connection: 'keep-alive'
+			});
+			for (const delta of frames) {
+				res.write(
+					`data: ${JSON.stringify({
+						id: 'mock-tool-1',
+						object: 'chat.completion.chunk',
+						model: body.model,
+						choices: [{ index: 0, delta: { tool_calls: [delta] }, finish_reason: null }]
+					})}\n\n`
+				);
+			}
+			res.write(
+				`data: ${JSON.stringify({
+					id: 'mock-tool-1',
+					object: 'chat.completion.chunk',
+					model: body.model,
+					choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }]
+				})}\n\n`
+			);
+			res.write('data: [DONE]\n\n');
+			return res.end();
 		}
 		const content = reply(body.messages);
 

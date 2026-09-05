@@ -22,7 +22,17 @@ import {
 } from './prompts';
 import { search } from './retrieval';
 import { resultText, webSearch } from './websearch';
+import { WEB_TOOLS, isToolsUnsupported, runToolCall, toolCallAccumulator } from './tools';
 import { HttpError, now, toJSON } from './util';
+
+/**
+ * How many times the model may call tools before it has to answer.
+ *
+ * Three is enough for search → read a result → search again with what it
+ * learned, which is the pattern worth supporting; beyond that a model is
+ * usually stuck rather than working.
+ */
+const MAX_TOOL_ROUNDS = 3;
 
 /** OpenAI sampling parameters we forward; everything else is Open WebUI's own. */
 const FORWARDED_PARAMS = new Set([
@@ -181,6 +191,8 @@ export function renderSystemPrompt(template: string, variables: Record<string, u
 export interface NormalizedChunk {
 	content?: string;
 	reasoning?: string;
+	/** Raw OpenAI tool-call deltas; reassembled by `toolCallAccumulator`. */
+	toolCalls?: any[];
 	usage?: Record<string, unknown>;
 	finishReason?: string | null;
 	raw?: unknown;
@@ -223,6 +235,8 @@ export function normalizeChunk(payload: any): NormalizedChunk | null {
 		return {
 			content: delta.content ?? choice.message?.content ?? undefined,
 			reasoning: delta.reasoning_content ?? delta.reasoning ?? undefined,
+			// Streamed as deltas; a non-streamed reply carries them on `message`.
+			toolCalls: delta.tool_calls ?? choice.message?.tool_calls ?? undefined,
 			usage: payload.usage ?? undefined,
 			finishReason: choice.finish_reason ?? null,
 			raw: payload
@@ -454,6 +468,9 @@ export async function runCompletion(
 
 	let content = '';
 	let usage: Record<string, unknown> | undefined;
+	// Sources accumulate across tool rounds, so a second search does not erase
+	// the citations from the first.
+	const toolSources: Record<string, unknown>[] = [];
 
 	try {
 		const resolved = await resolveModel(env, job.modelId);
@@ -468,8 +485,16 @@ export async function runCompletion(
 			job.body = { ...job.body, messages: [...requestMessages, ...history] };
 		}
 
-		// Web search runs before the model call and becomes part of the context.
-		if (job.body.features?.web_search) {
+		// Web search has two modes. `always` searches once before the model runs,
+		// which is predictable and needs nothing of the model. `tool` hands it the
+		// search as a function it can choose to call, more than once if it wants —
+		// only possible on an OpenAI-compatible endpoint, since the Workers AI
+		// binding has no tool-calling shape.
+		const webSearchOn = Boolean(job.body.features?.web_search);
+		const mode = String((await getConfig(env, 'web.search.mode')) ?? 'always');
+		let useTools = webSearchOn && mode === 'tool' && resolved.workersAI !== true;
+
+		if (webSearchOn && !useTools) {
 			await runWebSearch(env, job, emit);
 		}
 
@@ -513,41 +538,122 @@ export async function runCompletion(
 			// in the message text, so the thinking is wrapped into one as it
 			// arrives, then closed when the answer proper starts.
 			const reasoning = openReasoningBlock();
+			const pushDelta = async (delta: string) => {
+				content += delta;
+				await emitCompletion({
+					id: job.messageId,
+					choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
+					done: false
+				});
+			};
 
-			for await (const chunk of streamUpstream(env, request)) {
-				if (chunk.usage) usage = chunk.usage;
+			// Each round is one model turn. A turn that ends in tool calls is run,
+			// its results appended, and the model asked again; a turn that produces
+			// only text ends the loop. The cap stops a model that keeps calling the
+			// same tool from looping forever.
+			let messages = request.payload.messages as CompletionMessage[];
+			for (let round = 0; ; round += 1) {
+				const roundRequest: UpstreamRequest = {
+					...request,
+					payload: {
+						...request.payload,
+						messages,
+						...(useTools && round < MAX_TOOL_ROUNDS
+							? { tools: WEB_TOOLS, tool_choice: 'auto' }
+							: {})
+					}
+				};
 
-				if (chunk.reasoning) {
-					const delta = reasoning.push(chunk.reasoning);
-					content += delta;
-					await emitCompletion({
-						id: job.messageId,
-						choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
-						done: false
-					});
+				const pending = toolCallAccumulator();
+				try {
+					for await (const chunk of streamUpstream(env, roundRequest)) {
+						if (chunk.usage) usage = chunk.usage;
+						if (chunk.toolCalls) pending.push(chunk.toolCalls);
+						if (chunk.reasoning) await pushDelta(reasoning.push(chunk.reasoning));
+						if (chunk.content) await pushDelta(reasoning.close() + chunk.content);
+					}
+				} catch (error) {
+					// Not every model accepts `tools`. Rather than failing the message,
+					// drop back to the mode that needs nothing of the model: search
+					// first, then ask again without tools. Only worth trying before
+					// anything has been streamed to the user.
+					if (!(useTools && round === 0 && isToolsUnsupported(String((error as Error).message))))
+						throw error;
+					console.warn('[open-webui] model rejected tools; searching before the turn instead');
+					useTools = false;
+					await runWebSearch(env, job, emit);
+					messages = buildUpstreamRequest(resolved, job.body, { stream }).payload
+						.messages as CompletionMessage[];
+					continue;
 				}
 
-				if (chunk.content) {
-					const delta = reasoning.close() + chunk.content;
-					content += delta;
-					await emitCompletion({
-						id: job.messageId,
-						choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
-						done: false
+				const calls = pending.calls();
+				if (!calls.length) break;
+
+				// The model's own turn has to go back verbatim, tool calls included,
+				// or the follow-up messages have nothing to answer.
+				messages = [
+					...messages,
+					{
+						role: 'assistant',
+						content: null,
+						tool_calls: calls.map((call) => ({
+							id: call.id,
+							type: 'function',
+							function: { name: call.name, arguments: call.arguments }
+						}))
+					}
+				];
+
+				for (const call of calls) {
+					await emit({
+						chat_id: job.chatId,
+						message_id: job.messageId,
+						data: {
+							type: 'status',
+							data: { action: 'web_search', description: `Running ${call.name}…`, done: false }
+						}
+					});
+
+					const outcome = await runToolCall(env, call).catch((error) => ({
+						content: `The tool failed: ${(error as Error).message}`,
+						sources: [] as Record<string, unknown>[],
+						status: `${call.name} failed`
+					}));
+
+					messages = [
+						...messages,
+						{ role: 'tool', tool_call_id: call.id, content: outcome.content }
+					];
+
+					for (const source of outcome.sources) {
+						await emit({
+							chat_id: job.chatId,
+							message_id: job.messageId,
+							data: { type: 'source', data: source }
+						});
+					}
+					if (outcome.sources.length) {
+						toolSources.push(...outcome.sources);
+						if (job.saveToChat) {
+							await upsertMessage(env, job.chatId, job.messageId, { sources: toolSources });
+						}
+					}
+
+					await emit({
+						chat_id: job.chatId,
+						message_id: job.messageId,
+						data: {
+							type: 'status',
+							data: { action: 'web_search', description: outcome.status, done: true }
+						}
 					});
 				}
 			}
 
 			// A model that only ever produced reasoning still needs its block shut.
 			const trailing = reasoning.close();
-			if (trailing) {
-				content += trailing;
-				await emitCompletion({
-					id: job.messageId,
-					choices: [{ index: 0, delta: { content: trailing }, finish_reason: null }],
-					done: false
-				});
-			}
+			if (trailing) await pushDelta(trailing);
 		} else {
 			const result = await callUpstream(env, request);
 			content = result.content;

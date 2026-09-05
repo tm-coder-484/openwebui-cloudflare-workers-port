@@ -467,6 +467,99 @@ if (models.data?.length) {
 	console.log('  ! no models configured — completion check skipped');
 }
 
+// --- Model-invoked web search --------------------------------------------
+// The other web-search mode: instead of searching before every turn, the model
+// is given `web_search`/`web_fetch` as tools and decides for itself. Needs both
+// mocks, and the mock models that exercise tool calling.
+const toolModels = (models.data ?? []).map((model) => model.id);
+if (isAdmin && searchMockUp && toolModels.includes('mock-tools')) {
+	console.log('\nweb search as a tool');
+
+	const runTurn = async (modelId, prompt) => {
+		const socket = await connectSocket(token);
+		try {
+			socket.resetEvents();
+			const messageId = crypto.randomUUID();
+			const done = socket.waitFor(messageId);
+			await api('/api/chat/completions', {
+				method: 'POST',
+				body: JSON.stringify({
+					stream: true,
+					model: modelId,
+					messages: [{ role: 'user', content: prompt }],
+					features: { web_search: true },
+					id: messageId,
+					parent_id: null,
+					session_id: socket.sid,
+					user_message: {
+						id: crypto.randomUUID(),
+						parentId: null,
+						childrenIds: [],
+						role: 'user',
+						content: prompt
+					},
+					background_tasks: {}
+				})
+			});
+			const content = await done;
+			return { content, statuses: [...socket.statuses], sources: socket.sourceCount };
+		} finally {
+			socket.close();
+		}
+	};
+
+	await check('switch web search to tool mode', async () => {
+		const saved = await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({
+				web: {
+					ENABLE_WEB_SEARCH: true,
+					WEB_SEARCH_MODE: 'tool',
+					WEB_SEARCH_ENGINE: 'searxng',
+					SEARXNG_QUERY_URL: SEARCH_MOCK
+				}
+			})
+		});
+		assert(saved.web.WEB_SEARCH_MODE === 'tool', 'the search mode was not saved');
+	});
+
+	await check('the model calls the search tool and cites what it found', async () => {
+		const before = await fetch(`${SEARCH_MOCK}/page-loads`).then((r) => r.json());
+		const turn = await runTurn('mock-tools', 'What is Cloudflare Workers?');
+		const after = await fetch(`${SEARCH_MOCK}/page-loads`).then((r) => r.json());
+
+		// The query is the model's, assembled from argument fragments split across
+		// stream chunks — not the user's message.
+		assert(
+			turn.statuses.some((line) => line.includes('cloudflare workers')),
+			`no search status for the model's own query: ${JSON.stringify(turn.statuses)}`
+		);
+		assert(turn.sources > 0, 'the tool results were not emitted as citable sources');
+		assert(turn.content.trim().length > 0, 'the model never produced an answer after the tool ran');
+		assert(after.pageLoads > before.pageLoads, 'the search never reached the engine');
+	});
+
+	await check('a model that refuses tools falls back to searching first', async () => {
+		const turn = await runTurn('mock-no-tools', 'What is Cloudflare Workers?');
+		assert(
+			turn.content.trim().length > 0,
+			'the turn failed instead of falling back when the model rejected tools'
+		);
+		assert(
+			turn.statuses.some((line) => /Searching the web|Searched the web/.test(line)),
+			`no pre-search status after the fallback: ${JSON.stringify(turn.statuses)}`
+		);
+	});
+
+	await check('put web search back into always mode', async () => {
+		const saved = await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({ web: { WEB_SEARCH_MODE: 'always' } })
+		});
+		assert(saved.web.WEB_SEARCH_MODE === 'always', 'the search mode was not restored');
+	});
+}
+
 // --- Retrieval in a completion -------------------------------------------
 if (fileId && models.data?.length) {
 	console.log('\nfile context');
@@ -659,6 +752,7 @@ async function connectSocket(authToken) {
 	const channelListeners = new Map();
 	let sid = null;
 	let sources = 0;
+	const statusLines = [];
 
 	await new Promise((resolve, reject) => {
 		const timer = setTimeout(() => reject(new Error('socket connect timed out')), 15000);
@@ -689,6 +783,9 @@ async function connectSocket(authToken) {
 				}
 				if (name !== 'events') return;
 				if (payload.data?.type === 'source') sources += 1;
+				if (payload.data?.type === 'status') {
+					statusLines.push(String(payload.data?.data?.description ?? ''));
+				}
 				const handler = listeners.get(payload.message_id);
 				if (handler) handler(payload);
 			}
@@ -698,6 +795,18 @@ async function connectSocket(authToken) {
 	return {
 		get sid() {
 			return sid;
+		},
+		// Status lines and source events are how the tool loop shows its work, so
+		// the tool-mode checks read them back off the socket.
+		get statuses() {
+			return statusLines;
+		},
+		get sourceCount() {
+			return sources;
+		},
+		resetEvents() {
+			statusLines.length = 0;
+			sources = 0;
 		},
 		waitFor(messageId) {
 			return new Promise((resolve, reject) => {

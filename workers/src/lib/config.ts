@@ -145,6 +145,9 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 
 	'web.search.enable': false,
 	'web.search.engine': 'duckduckgo',
+	// 'always' searches once before every turn; 'tool' offers the search to the
+	// model as a function it can choose to call.
+	'web.search.mode': 'always',
 	'web.search.api_key': '',
 	'web.search.google_pse.api_key': '',
 	'web.search.google_pse.engine_id': '',
