@@ -10,6 +10,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { AppContext, Env } from './types';
 import { authenticate } from './lib/auth';
+import { stampShareables } from './lib/shareable';
 import { HttpError, resolveAllowedOrigin } from './lib/util';
 import { runDueAutomations } from './lib/automations';
 
@@ -63,6 +64,37 @@ app.use('*', (c, next) =>
 	})(c, next)
 );
 app.use('*', authenticate);
+
+/**
+ * Fills in the two fields every workspace screen reads off a shareable
+ * resource and no serialiser here was sending: `write_access` and `user`.
+ * See `lib/shareable.ts` for what each one does and why it is stamped
+ * centrally rather than added to seven serialisers.
+ *
+ * The body is only parsed when its text actually contains `access_grants`, so
+ * the cost falls on the workspace listings and on nothing else.
+ */
+app.use('/api/v1/*', async (c, next) => {
+	await next();
+	const user = c.get('user');
+	if (!user || !c.res.ok) return;
+	if (!c.res.headers.get('content-type')?.includes('application/json')) return;
+
+	const text = await c.res.clone().text();
+	if (!text.includes('"access_grants"')) return;
+
+	let body: unknown;
+	try {
+		body = JSON.parse(text);
+	} catch {
+		return;
+	}
+	if (!(await stampShareables(c.env, user, body))) return;
+
+	const headers = new Headers(c.res.headers);
+	headers.delete('content-length');
+	c.res = new Response(JSON.stringify(body), { status: c.res.status, headers });
+});
 
 // Realtime transport (socket.io) — must be registered before the API groups so
 // the WebSocket upgrade is never swallowed by a JSON handler.
