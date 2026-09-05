@@ -236,6 +236,18 @@
 				await loadPptxContent();
 			}
 
+			// Open on the preview when there is nothing to read.
+			//
+			// The Content tab shows the text pulled out of a file, and for a PDF or
+			// an image there may be none — so the first thing shown was the words
+			// "No content", over a file that renders perfectly one tab away. Decided
+			// once, here, rather than reactively: the tab must not move under
+			// someone who has already chosen one.
+			const hasText = String(item?.file?.data?.content ?? item?.content ?? '').trim().length > 0;
+			if (!hasText && (isPDF || isAudio || isExcel || isDocx || isPptx)) {
+				selectedTab = 'preview';
+			}
+
 			loading = false;
 		}
 
@@ -247,7 +259,6 @@
 	}
 
 	onMount(() => {
-		console.log(item);
 		if (item?.context === 'full') {
 			enableFullContent = true;
 		}

@@ -968,6 +968,66 @@ if (isAdmin) {
 		}
 	});
 
+	await check('a file comes back as itself, for the previews to render', async () => {
+		// Every preview — the image, the PDF viewer, the spreadsheet — fetches
+		// /content and renders the bytes. It has to answer with the file as
+		// uploaded, under the type it was uploaded as: an image served as
+		// application/octet-stream renders as a broken image, and a PDF served as
+		// text renders as nothing.
+		const samples = [
+			['preview.txt', 'text/plain', 'Workers run on V8 isolates.'],
+			// A one-pixel PNG, so the check needs no fixture on disk.
+			[
+				'preview.png',
+				'image/png',
+				Uint8Array.from(
+					atob(
+						'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+					),
+					(c) => c.charCodeAt(0)
+				)
+			]
+		];
+
+		for (const [name, type, body] of samples) {
+			const form = new FormData();
+			form.append('file', new Blob([body], { type }), name);
+			// Not through `api`: that helper sets a JSON content type, which would
+			// override the multipart boundary the FormData needs.
+			const upload = await fetch(`${BASE}/api/v1/files/`, {
+				method: 'POST',
+				headers: { Authorization: `Bearer ${token}` },
+				body: form
+			});
+			assert(upload.ok, `${name} did not upload: ${upload.status}`);
+			const uploaded = await upload.json();
+			assert(uploaded?.id, `${name} uploaded without an id`);
+
+			// The list the preview reads its type and size from.
+			assert(
+				uploaded.meta?.content_type === type,
+				`${name} came back as ${uploaded.meta?.content_type}, not ${type}`
+			);
+
+			const res = await fetch(`${BASE}/api/v1/files/${uploaded.id}/content`, {
+				headers: { Authorization: `Bearer ${token}` }
+			});
+			assert(res.ok, `${name}: /content answered ${res.status}`);
+			assert(
+				(res.headers.get('content-type') ?? '').startsWith(type),
+				`${name}: /content served ${res.headers.get('content-type')}, not ${type}`
+			);
+			const bytes = new Uint8Array(await res.arrayBuffer());
+			const expected = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+			assert(
+				bytes.length === expected.length,
+				`${name}: got ${bytes.length} bytes back, sent ${expected.length}`
+			);
+
+			await api(`/api/v1/files/${uploaded.id}`, { method: 'DELETE' }).catch(() => {});
+		}
+	});
+
 	await check('the file picker finds files with the pattern the UI sends', async () => {
 		// The composer sends `*name*` while you type and `*` when the box is empty.
 		// Taking that literally made the picker empty whatever the account held.
