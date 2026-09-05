@@ -10,6 +10,9 @@
  */
 
 const BASE = (process.argv[2] ?? 'http://127.0.0.1:8787').replace(/\/+$/, '');
+// Where the mock model server listens, for the one check that needs to see what
+// the Worker sent rather than what came back.
+const MOCK_BASE = process.env.MOCK_BASE ?? 'http://127.0.0.1:11435/v1';
 const EMAIL = process.env.SMOKE_EMAIL ?? `smoke-${Date.now()}@example.com`;
 const PASSWORD = process.env.SMOKE_PASSWORD ?? 'smoke-test-password';
 const NAME = 'Smoke Test';
@@ -804,6 +807,100 @@ if (models.data?.some((model) => model.id === 'mock-reasoner')) {
 			!content.includes('done="false"'),
 			'a reasoning block was left marked unfinished in the saved message'
 		);
+	});
+
+	await check('a past turn goes back as the answer, not the markup', async () => {
+		// A stored message carries the chat screen's markup: the reasoning block,
+		// the tool call. Sent back it fills the context the model needs to think
+		// in, shows it a format to imitate, and makes the background tasks
+		// summarise the thinking rather than the answer. Measured against a real
+		// reasoning model, it was 58-78% of every follow-up request.
+		const chat = await api('/api/v1/chats/new', {
+			method: 'POST',
+			body: JSON.stringify({
+				chat: {
+					title: 'Reasoning history',
+					models: ['mock-reasoner'],
+					history: { messages: {}, currentId: null },
+					messages: []
+				}
+			})
+		});
+
+		// The frontend sends the whole conversation each turn, markup and all —
+		// that is the history this check is about, so it is what is sent here.
+		const say = async (messages, parentId) => {
+			const socket = await connectSocket(token);
+			try {
+				const messageId = crypto.randomUUID();
+				const done = socket.waitFor(messageId);
+				const prompt = messages.at(-1).content;
+				await api('/api/chat/completions', {
+					method: 'POST',
+					body: JSON.stringify({
+						stream: true,
+						model: 'mock-reasoner',
+						chat_id: chat.id,
+						messages,
+						id: messageId,
+						parent_id: parentId,
+						session_id: socket.sid,
+						user_message: {
+							id: crypto.randomUUID(),
+							parentId,
+							childrenIds: [],
+							role: 'user',
+							content: prompt
+						},
+						background_tasks: {}
+					})
+				});
+				return { content: await done, messageId };
+			} finally {
+				socket.close();
+			}
+		};
+
+		const first = await say([{ role: 'user', content: 'think about this twice' }], null);
+		assert(
+			first.content.includes('<details type="reasoning"'),
+			'the first turn produced no reasoning block to strip'
+		);
+
+		await fetch(`${MOCK_BASE}/__reset-requests`).catch(() => {});
+		await say(
+			[
+				{ role: 'user', content: 'think about this twice' },
+				{ role: 'assistant', content: first.content },
+				{ role: 'user', content: 'and again' }
+			],
+			first.messageId
+		);
+
+		// Everything the mock was sent for that second turn — the turn itself and
+		// the background tasks that follow it, since the markup reached all of
+		// them and only the turn carries more than one message.
+		const sent = await fetch(`${MOCK_BASE}/__recent-requests`)
+			.then((r) => r.json())
+			.catch(() => null);
+		if (!Array.isArray(sent) || !sent.length) {
+			console.log('    (skipped: the mock reported no requests)');
+			return;
+		}
+
+		const turns = sent.filter((request) => (request.messages ?? []).length > 1);
+		assert(turns.length > 0, 'the second turn sent no history at all');
+
+		for (const request of sent) {
+			for (const message of request.messages ?? []) {
+				const text =
+					typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
+				assert(
+					!text.includes('<details'),
+					`${message.role} message went upstream still carrying markup: ${JSON.stringify(text.slice(0, 130))}`
+				);
+			}
+		}
 	});
 
 	await check('a reasoning model still gets a usable title', async () => {
