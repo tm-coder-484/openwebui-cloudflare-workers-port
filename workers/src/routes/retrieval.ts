@@ -34,6 +34,7 @@ const RAG_KEYS: Record<string, string> = {
 const WEB_KEYS: Record<string, string> = {
 	ENABLE_WEB_SEARCH: 'web.search.enable',
 	WEB_SEARCH_ENGINE: 'web.search.engine',
+	WEB_SEARCH_MODE: 'web.search.mode',
 	WEB_SEARCH_API_KEY: 'web.search.api_key',
 	GOOGLE_PSE_API_KEY: 'web.search.google_pse.api_key',
 	GOOGLE_PSE_ENGINE_ID: 'web.search.google_pse.engine_id',

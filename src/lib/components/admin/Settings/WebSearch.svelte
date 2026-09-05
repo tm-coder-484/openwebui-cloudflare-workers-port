@@ -220,6 +220,24 @@
 					</SettingsSelect>
 				</AdminSettingRow>
 
+				<AdminSettingRow
+					label={$i18n.t('Search Mode')}
+					description={$i18n.t('Search before every turn, or let the model decide when to search.')}
+				>
+					<SettingsSelect bind:value={webConfig.WEB_SEARCH_MODE} placeholder={$i18n.t('Always')}>
+						<option value="always">{$i18n.t('Always search')}</option>
+						<option value="tool">{$i18n.t('Model decides (tool calling)')}</option>
+					</SettingsSelect>
+				</AdminSettingRow>
+
+				{#if webConfig.WEB_SEARCH_MODE === 'tool'}
+					<div class="mb-2.5 text-xs text-gray-500 dark:text-gray-400">
+						{$i18n.t(
+							'The model is given web_search and web_fetch as tools and calls them when it judges a search is needed, up to three rounds. Needs a model that supports tool calling; if it does not, the turn falls back to searching first.'
+						)}
+					</div>
+				{/if}
+
 				{#if webConfig.WEB_SEARCH_ENGINE !== ''}
 					{#if webConfig.WEB_SEARCH_ENGINE === 'ollama_cloud'}
 						<div class="mb-2.5 flex w-full flex-col">
