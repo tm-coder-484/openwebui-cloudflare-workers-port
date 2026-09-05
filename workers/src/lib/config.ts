@@ -198,6 +198,9 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'rag.embedding_model': '@cf/baai/bge-base-en-v1.5',
 	'rag.hybrid_search': false,
 	'rag.full_context': false,
+	// The Documents screen's other name for the same thing: skip retrieval and
+	// give the model the whole document.
+	'rag.bypass_embedding': false,
 
 	'file.image_compression_width': null,
 	'file.image_compression_height': null,

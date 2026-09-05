@@ -10,7 +10,7 @@
 
 import type { Env } from '../types';
 import { getConfig } from './config';
-import { now, uuid } from './util';
+import { now, parseJSON, uuid } from './util';
 
 export interface Chunk {
 	id: string;
@@ -244,5 +244,58 @@ export async function search(
 		}
 	}
 
-	return scoreChunks(query, chunks).slice(0, topK);
+	const scored = scoreChunks(query, chunks);
+	if (scored.length) return scored.slice(0, topK);
+
+	// Nothing scored: the query shares no term with the document. That is not a
+	// rare edge — "summarise the attached document" has no word in common with
+	// most documents — and returning nothing meant the attachment silently
+	// contributed nothing at all. Vectorize would still have offered its nearest
+	// chunks; without it, the opening of the document is the honest default.
+	return [...chunks]
+		.sort((a, b) => (a.idx ?? 0) - (b.idx ?? 0))
+		.slice(0, topK)
+		.map((chunk) => ({ ...chunk, score: 0 }));
+}
+
+/**
+ * The whole text of the attached files, for full-context mode.
+ *
+ * Retrieval hands the model `rag.top_k` chunks of `rag.chunk_size` characters —
+ * three thousand characters by default, however long the document is. That is
+ * the right trade for a knowledge base of hundreds of files and the wrong one
+ * for "read this document and tell me about it", which is why upstream offers
+ * a switch. This is the other side of that switch.
+ */
+export async function fullText(
+	env: Env,
+	options: { fileIds?: string[]; knowledgeIds?: string[] }
+): Promise<{ file_id: string; filename: string; content: string }[]> {
+	const ids = new Set(options.fileIds ?? []);
+
+	if (options.knowledgeIds?.length) {
+		const placeholders = options.knowledgeIds.map(() => '?').join(', ');
+		const { results } = await env.DB.prepare(
+			`SELECT file_id FROM knowledge_file WHERE knowledge_id IN (${placeholders})`
+		)
+			.bind(...options.knowledgeIds)
+			.all<{ file_id: string }>();
+		for (const row of results ?? []) ids.add(row.file_id);
+	}
+	if (!ids.size) return [];
+
+	const list = [...ids];
+	const { results } = await env.DB.prepare(
+		`SELECT id, filename, data FROM file WHERE id IN (${list.map(() => '?').join(', ')})`
+	)
+		.bind(...list)
+		.all<{ id: string; filename: string; data: string }>();
+
+	return (results ?? [])
+		.map((row) => ({
+			file_id: row.id,
+			filename: row.filename,
+			content: String(parseJSON<{ content?: string }>(row.data, {}).content ?? '')
+		}))
+		.filter((file) => file.content.trim());
 }

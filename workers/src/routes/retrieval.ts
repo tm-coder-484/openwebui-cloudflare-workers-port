@@ -17,6 +17,8 @@ const RAG_KEYS: Record<string, string> = {
 	CHUNK_OVERLAP: 'rag.chunk_overlap',
 	RAG_TEMPLATE: 'rag.template',
 	RAG_FULL_CONTEXT: 'rag.full_context',
+	// Rendered by the Documents screen and, until now, dropped on save.
+	BYPASS_EMBEDDING_AND_RETRIEVAL: 'rag.bypass_embedding',
 	ENABLE_RAG_HYBRID_SEARCH: 'rag.hybrid_search',
 	RAG_EMBEDDING_ENGINE: 'rag.embedding_engine',
 	RAG_EMBEDDING_MODEL: 'rag.embedding_model',

@@ -302,7 +302,36 @@ npx wrangler vectorize create open-webui --dimensions=768 --metric=cosine
 
 Without Vectorize, retrieval falls back to TF-IDF-style keyword scoring over the
 chunks stored in D1 — good enough for small knowledge bases, and it needs no
-extra services.
+extra services. When a query shares no term at all with the document — "summarise
+the attached document" usually does not — the opening chunks are returned rather
+than nothing, so an attachment always contributes something.
+
+**How much of an attached document reaches the model.** By default, retrieval,
+which means `rag.top_k` chunks of `rag.chunk_size` characters each: **three
+thousand characters**, however long the file is. That is the right trade for a
+knowledge base of hundreds of files and the wrong one for "read this and
+summarise it".
+
+Two switches under **Admin Settings → Documents** hand over whole documents
+instead, and mean the same thing here:
+
+| Setting                        | Config key             |
+| ------------------------------ | ---------------------- |
+| Full Context Mode              | `rag.full_context`     |
+| Bypass Embedding and Retrieval | `rag.bypass_embedding` |
+
+With either on, every attached file — and every file in an attached knowledge
+base — is passed in full. There is no cap: that is what the setting means, so a
+document larger than the model's context window is rejected by the provider,
+which reports it as a context-length error. Raising **Top K** and **Chunk Size**
+is the middle ground if you want more than three thousand characters without
+sending everything.
+
+**Only text is extracted.** A `.txt`, `.md`, `.csv`, `.json`, source file and
+similar are decoded and indexed; a PDF, `.docx` or image is stored in R2 and
+served back intact, but contributes no text to a conversation, because
+extracting it needs native libraries that do not run on Workers. Convert to text
+before uploading, or paste the content.
 
 ### Automations
 
