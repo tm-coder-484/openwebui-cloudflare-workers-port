@@ -39,6 +39,10 @@ export interface Env {
 	OLLAMA_BASE_URL?: string;
 	ENABLE_OPENAI_API?: string;
 	JWT_EXPIRES_IN?: string;
+	TOOLS_MAX_ROUNDS?: string;
+	ENABLE_MEMORY_TOOLS?: string;
+	ENABLE_FILE_TOOLS?: string;
+	ENABLE_SEARCH_TOOLS?: string;
 	WEB_SEARCH_API_KEY?: string;
 	WEB_SEARCH_URL?: string;
 	RAG_EMBEDDING_MODEL?: string;

@@ -286,6 +286,14 @@ function envDefaults(env: Env): Record<string, unknown> {
 	if (env.RAG_EMBEDDING_MODEL) seeded['rag.embedding_model'] = env.RAG_EMBEDDING_MODEL;
 	if (env.TASK_MODEL) seeded['task.model'] = env.TASK_MODEL;
 
+	if (env.TOOLS_MAX_ROUNDS) seeded['tools.max_rounds'] = Number(env.TOOLS_MAX_ROUNDS);
+	if (env.ENABLE_MEMORY_TOOLS !== undefined)
+		seeded['tools.memory.enable'] = toBool(env.ENABLE_MEMORY_TOOLS);
+	if (env.ENABLE_FILE_TOOLS !== undefined)
+		seeded['tools.files.enable'] = toBool(env.ENABLE_FILE_TOOLS);
+	if (env.ENABLE_SEARCH_TOOLS !== undefined)
+		seeded['tools.search.enable'] = toBool(env.ENABLE_SEARCH_TOOLS);
+
 	if (env.ENABLE_NVIDIA_API !== undefined) seeded['nvidia.enable'] = toBool(env.ENABLE_NVIDIA_API);
 	if (env.NVIDIA_API_KEY) seeded['nvidia.api_key'] = env.NVIDIA_API_KEY;
 	if (env.NVIDIA_API_BASE_URL) seeded['nvidia.api_base_url'] = env.NVIDIA_API_BASE_URL;

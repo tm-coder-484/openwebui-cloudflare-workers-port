@@ -587,8 +587,23 @@ and edit are four rounds on their own. The value is clamped to 1-20 rather than
 trusted: a round is a whole model call plus its tool work, so an unbounded value
 is a turn that never ends and a bill to match.
 
-All default to on, and are switched through the config API
-(`POST /api/v1/configs/...`) rather than a settings screen. They do **not**
+All default to on. There is no settings screen for them, so they are set either
+as **Worker variables** (Settings → Variables and Secrets) or through the config
+API — the variable seeds the value on first read, the API changes it at runtime
+without a redeploy:
+
+| Variable              | Config key            | Value           |
+| --------------------- | --------------------- | --------------- |
+| `TOOLS_MAX_ROUNDS`    | `tools.max_rounds`    | 1-20, default 3 |
+| `ENABLE_MEMORY_TOOLS` | `tools.memory.enable` | true / false    |
+| `ENABLE_FILE_TOOLS`   | `tools.files.enable`  | true / false    |
+| `ENABLE_SEARCH_TOOLS` | `tools.search.enable` | true / false    |
+
+````bash
+curl -X POST "$WEBUI/api/v1/configs/tools" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"TOOLS_MAX_ROUNDS": 8, "ENABLE_FILE_TOOLS": false}'
+``` They do **not**
 require web search to be enabled for the turn — the search mode governs the
 search tools only.
 
@@ -681,7 +696,7 @@ start script wires it up for you:
 
 ```bash
 ./start-workers.sh --mock --sso        # Windows: start-workers.bat --mock --sso
-```
+````
 
 The login page then shows **Continue with Mock IdP**, which signs you in as
 `sso.user@example.com` without asking for anything. To drive it by hand instead,

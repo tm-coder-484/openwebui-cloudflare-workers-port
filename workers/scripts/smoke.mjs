@@ -637,6 +637,25 @@ if (isAdmin) {
 		});
 	}
 
+	await check('the tool settings can actually be changed', async () => {
+		// They shipped with a default and no way to set it — no key map, no
+		// environment variable, no screen.
+		const saved = await api('/api/v1/configs/tools', {
+			method: 'POST',
+			body: JSON.stringify({ TOOLS_MAX_ROUNDS: 7, ENABLE_FILE_TOOLS: false })
+		});
+		assert(saved.TOOLS_MAX_ROUNDS === 7, 'the round cap was not saved');
+		assert(saved.ENABLE_FILE_TOOLS === false, 'the file-tools switch was not saved');
+
+		const reloaded = await api('/api/v1/configs/tools');
+		assert(reloaded.TOOLS_MAX_ROUNDS === 7, 'the round cap did not persist');
+
+		await api('/api/v1/configs/tools', {
+			method: 'POST',
+			body: JSON.stringify({ TOOLS_MAX_ROUNDS: 3, ENABLE_FILE_TOOLS: true })
+		});
+	});
+
 	await check('the ComfyUI node lists are arrays, not just present', async () => {
 		// `config.COMFYUI_WORKFLOW_NODES.find(...)` runs whatever the engine is.
 		const images = await api('/api/v1/images/config');
