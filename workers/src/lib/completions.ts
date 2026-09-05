@@ -689,7 +689,36 @@ export async function runCompletion(
 					done: false
 				});
 
-			const pushDelta = async (delta: string) => {
+			/**
+			 * The floor between two whole-message sends.
+			 *
+			 * A whole message per token would cost the square of the thought: a
+			 * model reasoning for a minute sends thousands of chunks, and resending
+			 * a growing message for each turned a 16KB answer into megabytes on the
+			 * wire. Coalescing bounds that by wall-clock instead — and no reader
+			 * can tell 150ms from instant, which is why this costs nothing that is
+			 * worth having.
+			 *
+			 * Skipping a send is only ever safe because the frontend *replaces* the
+			 * message with what it receives rather than appending to it: a dropped
+			 * update is superseded by the next, and `closeReasoning` always sends
+			 * the final state.
+			 *
+			 * The first send of a block is never skipped. Appearing at once is the
+			 * whole point, and a thought shorter than the interval would otherwise
+			 * show nothing until it ended — the bug this exists to fix.
+			 */
+			const MESSAGE_INTERVAL_MS = 150;
+			let lastMessageAt = 0;
+
+			const emitMessageThrottled = async (immediate = false) => {
+				const now = Date.now();
+				if (!immediate && now - lastMessageAt < MESSAGE_INTERVAL_MS) return;
+				lastMessageAt = now;
+				await emitMessage();
+			};
+
+			const pushDelta = async (delta: string, opensBlock = false) => {
 				// The reasoning block asks for a blank line before it; at the very
 				// start of a message there is nothing to separate it from.
 				if (!content) delta = delta.replace(/^\n+/, '');
@@ -698,7 +727,7 @@ export async function runCompletion(
 				// A delta is cheaper, and correct for everything except an open
 				// reasoning block, where the frontend has nothing to render it into.
 				if (reasoning.open) {
-					await emitMessage();
+					await emitMessageThrottled(opensBlock);
 					return;
 				}
 				await emitCompletion({
@@ -719,6 +748,10 @@ export async function runCompletion(
 				const trailing = reasoning.close();
 				if (!trailing) return;
 				content = reasoning.seal(content + trailing);
+				// Never throttled: this carries the last of the thinking, the real
+				// closing tag and the duration, and nothing follows it to correct a
+				// send that was skipped.
+				lastMessageAt = Date.now();
 				await emitMessage();
 			};
 
@@ -742,7 +775,10 @@ export async function runCompletion(
 					for await (const chunk of streamUpstream(env, roundRequest)) {
 						if (chunk.usage) usage = chunk.usage;
 						if (chunk.toolCalls) pending.push(chunk.toolCalls);
-						if (chunk.reasoning) await pushDelta(reasoning.push(chunk.reasoning));
+						if (chunk.reasoning) {
+							const opening = !reasoning.open;
+							await pushDelta(reasoning.push(chunk.reasoning), opening);
+						}
 						if (chunk.content) {
 							await closeReasoning();
 							await pushDelta(chunk.content);
