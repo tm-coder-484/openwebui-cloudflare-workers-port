@@ -117,11 +117,15 @@ describe('runToolCall', () => {
 				{ headers: { 'Content-Type': 'application/json' } }
 			)) as any;
 
-		const outcome = await runToolCall(searchEnv, {
-			id: 'c1',
-			name: 'web_search',
-			arguments: '{"query":"cloudflare workers"}'
-		});
+		const outcome = await runToolCall(
+			searchEnv,
+			{
+				id: 'c1',
+				name: 'web_search',
+				arguments: '{"query":"cloudflare workers"}'
+			},
+			{ userId: 'u1' }
+		);
 
 		expect(outcome.content).toContain('<source id="1"');
 		expect(outcome.content).toContain('https://a.test/1');
@@ -136,32 +140,44 @@ describe('runToolCall', () => {
 			return new Response('{"results":[]}', { headers: { 'Content-Type': 'application/json' } });
 		}) as any;
 
-		await runToolCall(searchEnv, {
-			id: 'c1',
-			name: 'web_search',
-			arguments: '{"query":"x","count":7}'
-		});
+		await runToolCall(
+			searchEnv,
+			{
+				id: 'c1',
+				name: 'web_search',
+				arguments: '{"query":"x","count":7}'
+			},
+			{ userId: 'u1' }
+		);
 		expect(body.max_results).toBe(7);
 	});
 
 	it('tells the model when it produced malformed arguments', async () => {
 		// Worth answering rather than throwing: the model can correct itself on
 		// the next round instead of the whole turn failing.
-		const outcome = await runToolCall(searchEnv, {
-			id: 'c1',
-			name: 'web_search',
-			arguments: '{"query": '
-		});
+		const outcome = await runToolCall(
+			searchEnv,
+			{
+				id: 'c1',
+				name: 'web_search',
+				arguments: '{"query": '
+			},
+			{ userId: 'u1' }
+		);
 		expect(outcome.content).toMatch(/not valid JSON/i);
 		expect(outcome.sources).toEqual([]);
 	});
 
 	it('refuses a fetch that is not an absolute http URL', async () => {
-		const outcome = await runToolCall(searchEnv, {
-			id: 'c1',
-			name: 'web_fetch',
-			arguments: '{"url":"file:///etc/passwd"}'
-		});
+		const outcome = await runToolCall(
+			searchEnv,
+			{
+				id: 'c1',
+				name: 'web_fetch',
+				arguments: '{"url":"file:///etc/passwd"}'
+			},
+			{ userId: 'u1' }
+		);
 		expect(outcome.content).toMatch(/absolute http/i);
 		expect(outcome.sources).toEqual([]);
 	});
@@ -172,21 +188,29 @@ describe('runToolCall', () => {
 				headers: { 'Content-Type': 'text/html' }
 			})) as any;
 
-		const outcome = await runToolCall(envWithConfig({}), {
-			id: 'c1',
-			name: 'web_fetch',
-			arguments: '{"url":"https://a.test/page"}'
-		});
+		const outcome = await runToolCall(
+			envWithConfig({}),
+			{
+				id: 'c1',
+				name: 'web_fetch',
+				arguments: '{"url":"https://a.test/page"}'
+			},
+			{ userId: 'u1' }
+		);
 		expect(outcome.content).toContain('Edge runtime notes');
 		expect(outcome.sources).toHaveLength(1);
 	});
 
 	it('names an unknown tool rather than failing the turn', async () => {
-		const outcome = await runToolCall(envWithConfig({}), {
-			id: 'c1',
-			name: 'delete_everything',
-			arguments: '{}'
-		});
+		const outcome = await runToolCall(
+			envWithConfig({}),
+			{
+				id: 'c1',
+				name: 'delete_everything',
+				arguments: '{}'
+			},
+			{ userId: 'u1' }
+		);
 		expect(outcome.content).toMatch(/no tool called delete_everything/i);
 	});
 });

@@ -467,6 +467,109 @@ if (models.data?.length) {
 	console.log('  ! no models configured — completion check skipped');
 }
 
+// --- Memory and file tools ------------------------------------------------
+// The model acting on the user's own data: what it remembers, and files it
+// writes. Both are checked through the ordinary APIs afterwards, so the proof
+// is that the data actually landed, not that a status line said so.
+if (models.data?.some((model) => model.id === 'mock-tools')) {
+	console.log('\nmemory & file tools');
+
+	const toolTurn = async (prompt) => {
+		const socket = await connectSocket(token);
+		try {
+			socket.resetEvents();
+			const messageId = crypto.randomUUID();
+			const done = socket.waitFor(messageId);
+			await api('/api/chat/completions', {
+				method: 'POST',
+				body: JSON.stringify({
+					stream: true,
+					model: 'mock-tools',
+					messages: [{ role: 'user', content: prompt }],
+					id: messageId,
+					parent_id: null,
+					session_id: socket.sid,
+					user_message: {
+						id: crypto.randomUUID(),
+						parentId: null,
+						childrenIds: [],
+						role: 'user',
+						content: prompt
+					},
+					background_tasks: {}
+				})
+			});
+			const content = await done;
+			return { content, statuses: [...socket.statuses] };
+		} finally {
+			socket.close();
+		}
+	};
+
+	const FACT = `Prefers answers with code examples ${Date.now()}`;
+
+	await check('the model remembers a fact, and it reaches the memories API', async () => {
+		const turn = await toolTurn(`TOOLTEST:remember ${FACT}`);
+		assert(
+			turn.statuses.some((line) => line.startsWith('Remembered')),
+			`no remember status: ${JSON.stringify(turn.statuses)}`
+		);
+		const memories = await api('/api/v1/memories/');
+		assert(
+			memories.some((memory) => memory.content === FACT),
+			'the fact never reached the memories table'
+		);
+	});
+
+	await check('the model recalls what it stored', async () => {
+		const turn = await toolTurn('TOOLTEST:recall code examples');
+		assert(
+			turn.statuses.some((line) => /^Recalled \d+ memories/.test(line)),
+			`no recall status: ${JSON.stringify(turn.statuses)}`
+		);
+	});
+
+	await check('the model creates a file, and it appears in the files API', async () => {
+		// The mock always writes the same name, so clear it first: a leftover from
+		// an earlier run would make create_file correctly refuse and fail this
+		// check for the wrong reason.
+		for (const file of await api('/api/v1/files/')) {
+			if (file.filename === 'agent-note.md') {
+				await api(`/api/v1/files/${file.id}`, { method: 'DELETE' }).catch(() => {});
+			}
+		}
+
+		const turn = await toolTurn('TOOLTEST:create');
+		assert(
+			turn.statuses.some((line) => line.includes('agent-note.md')),
+			`no create status: ${JSON.stringify(turn.statuses)}`
+		);
+		const files = await api('/api/v1/files/');
+		const created = files.find((file) => file.filename === 'agent-note.md');
+		assert(created, 'the file was never created');
+		const content = await fetch(`${BASE}/api/v1/files/${created.id}/content`, {
+			headers: { Authorization: `Bearer ${token}` }
+		}).then((r) => r.text());
+		assert(content.includes('bravo'), `unexpected file content: ${content.slice(0, 80)}`);
+	});
+
+	await check('the model edits that file, changing only the passage it named', async () => {
+		await toolTurn('TOOLTEST:edit');
+		const files = await api('/api/v1/files/');
+		const created = files.find((file) => file.filename === 'agent-note.md');
+		const content = await fetch(`${BASE}/api/v1/files/${created.id}/content`, {
+			headers: { Authorization: `Bearer ${token}` }
+		}).then((r) => r.text());
+		assert(content.includes('delta'), 'the edit did not apply');
+		assert(!content.includes('bravo'), 'the old text survived the edit');
+		assert(
+			content.includes('alpha') && content.includes('charlie'),
+			'the edit lost the rest of the file'
+		);
+		await api(`/api/v1/files/${created.id}`, { method: 'DELETE' }).catch(() => {});
+	});
+}
+
 // --- Admin config shapes --------------------------------------------------
 // The admin screens dereference these paths in `onMount` with no guard, so a
 // missing one is not a blank field — it is a TypeError that stops the whole tab

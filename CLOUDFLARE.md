@@ -566,6 +566,43 @@ to searching first and asks again without tools, which is why these are safe to
 leave on for a mixed set of models. In `combo` that fallback costs nothing
 extra, since the search has already run.
 
+### Tools the model can call
+
+Beyond web search, a model that supports tool calling is offered two more
+groups. Both act **only on the calling user's own data** — every statement
+behind them is scoped to the id of the account whose turn it is, so a model
+naming another user's file gets "not found" — and neither is a shell: there is
+no filesystem and no command execution anywhere in this port.
+
+| Group  | Tools                                                 | Config key            |
+| ------ | ----------------------------------------------------- | --------------------- |
+| Memory | `remember`, `recall`, `forget`                        | `tools.memory.enable` |
+| Files  | `list_files`, `read_file`, `create_file`, `edit_file` | `tools.files.enable`  |
+
+Both default to on, and are switched through the config API
+(`POST /api/v1/configs/...`) rather than a settings screen. They do **not**
+require web search to be enabled for the turn — the search mode governs the
+search tools only.
+
+**Memory** makes the existing per-user memories something the model reaches for
+rather than something injected: it saves a fact when the user tells it one, and
+looks it up when an answer depends on their setup or preferences. `recall`
+returns each memory with its id, which is what `forget` takes, so removing a
+memory the user says is wrong takes two calls and no guessing.
+
+**Files** operate on the same uploads as the Files list: a "file" is a row in D1
+with its bytes in R2, so anything the model writes shows up in the UI, can be
+attached to a later chat, and is indexed for retrieval like any other upload.
+Two deliberate refusals:
+
+- `create_file` will not overwrite an existing name — silently replacing a file
+  would lose whatever was in it. The model is told to use `edit_file` or pick
+  another name.
+- `edit_file` replaces an _exact_ passage and refuses when that passage appears
+  more than once, naming the count, rather than guessing which one was meant.
+  Whole-file rewrites are not offered at all: a model rewriting a document from
+  memory silently drops the parts it did not think to repeat.
+
 **Fetching one page.** Independently of search, `POST /api/v1/retrieval/process/web`
 with `{"url": "..."}` fetches a page, reduces it to text, stores it as a file
 and indexes it for retrieval — which is what typing `#https://example.com` in

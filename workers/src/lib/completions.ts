@@ -23,11 +23,11 @@ import {
 import { fullText, search } from './retrieval';
 import { resultText, webSearch } from './websearch';
 import {
-	WEB_TOOLS,
 	isToolsUnsupported,
 	runToolCall,
 	searchPlan,
-	toolCallAccumulator
+	toolCallAccumulator,
+	toolsFor
 } from './tools';
 import { HttpError, now, toJSON } from './util';
 
@@ -518,8 +518,21 @@ export async function runCompletion(
 		// hand and can still search again for what they did not cover.
 		const webSearchOn = Boolean(job.body.features?.web_search);
 		const mode = String((await getConfig(env, 'web.search.mode')) ?? 'always');
-		const plan = searchPlan(mode, webSearchOn, resolved.workersAI !== true);
-		let useTools = plan.tools;
+		const canCallTools = resolved.workersAI !== true;
+		const plan = searchPlan(mode, webSearchOn, canCallTools);
+
+		// Memory and file tools do not depend on web search being on for the turn,
+		// so the tool list is assembled from every enabled group rather than from
+		// the search mode alone.
+		const toolConfig = await getConfigMany(env, ['tools.memory.enable', 'tools.files.enable']);
+		const tools = canCallTools
+			? toolsFor({
+					web: plan.tools,
+					memory: toolConfig['tools.memory.enable'] !== false,
+					files: toolConfig['tools.files.enable'] !== false
+				})
+			: [];
+		let useTools = tools.length > 0;
 		let preSearched = plan.preSearch;
 
 		if (plan.preSearch) {
@@ -586,9 +599,7 @@ export async function runCompletion(
 					payload: {
 						...request.payload,
 						messages,
-						...(useTools && round < MAX_TOOL_ROUNDS
-							? { tools: WEB_TOOLS, tool_choice: 'auto' }
-							: {})
+						...(useTools && round < MAX_TOOL_ROUNDS ? { tools, tool_choice: 'auto' } : {})
 					}
 				};
 
@@ -610,8 +621,10 @@ export async function runCompletion(
 					console.warn('[open-webui] model rejected tools; searching before the turn instead');
 					useTools = false;
 					// In combo mode the pre-search has already run; searching again
-					// would duplicate its sources as well as its cost.
-					if (!preSearched) {
+					// would duplicate its sources as well as its cost. And a turn that
+					// only offered memory or file tools must not start searching the web
+					// just because the model refused them.
+					if (webSearchOn && !preSearched) {
 						await runWebSearch(env, job, emit);
 						preSearched = true;
 					}
@@ -648,7 +661,7 @@ export async function runCompletion(
 						}
 					});
 
-					const outcome = await runToolCall(env, call).catch((error) => ({
+					const outcome = await runToolCall(env, call, { userId: job.userId }).catch((error) => ({
 						content: `The tool failed: ${(error as Error).message}`,
 						sources: [] as Record<string, unknown>[],
 						status: `${call.name} failed`

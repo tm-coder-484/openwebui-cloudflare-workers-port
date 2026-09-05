@@ -14,12 +14,25 @@
 
 import type { Env } from '../types';
 import { fetchPageText, resultText, webSearch } from './websearch';
+import { addMemory, deleteMemory, queryMemories } from './memories';
+import { createUserFile, editUserFile, findUserFile, listUserFiles } from './userfiles';
 
 export interface ToolCall {
 	id: string;
 	name: string;
 	/** Raw JSON text, as the model produced it — parsed at call time. */
 	arguments: string;
+}
+
+/**
+ * Who the turn belongs to.
+ *
+ * Memory and file tools read and write that account's own data, so the id is
+ * not optional context — it is the boundary. Every statement behind these tools
+ * is scoped to it, so a model naming someone else's file gets "not found".
+ */
+export interface ToolContext {
+	userId: string;
 }
 
 export interface ToolOutcome {
@@ -112,7 +125,11 @@ export function toolCallAccumulator() {
 }
 
 /** Runs one tool call and shapes the reply for both the model and the UI. */
-export async function runToolCall(env: Env, call: ToolCall): Promise<ToolOutcome> {
+export async function runToolCall(
+	env: Env,
+	call: ToolCall,
+	context: ToolContext
+): Promise<ToolOutcome> {
 	let args: Record<string, any> = {};
 	try {
 		args = call.arguments ? JSON.parse(call.arguments) : {};
@@ -125,6 +142,9 @@ export async function runToolCall(env: Env, call: ToolCall): Promise<ToolOutcome
 			status: `Tool call to ${call.name} had malformed arguments`
 		};
 	}
+
+	const userData = await runUserDataTool(env, call, args, context);
+	if (userData) return userData;
 
 	if (call.name === 'web_search') {
 		const query = String(args.query ?? '').trim();
@@ -234,4 +254,263 @@ export function searchPlan(mode: string, enabled: boolean, canUseTools: boolean)
 	const wantsTools = mode === 'tool' || mode === 'combo';
 	const tools = wantsTools && canUseTools;
 	return { preSearch: !tools || mode === 'combo', tools };
+}
+
+export const MEMORY_TOOLS = [
+	{
+		type: 'function',
+		function: {
+			name: 'remember',
+			description:
+				'Save a fact about the user for future conversations — a preference, a ' +
+				'project they are working on, how they like answers written. Save the fact ' +
+				'itself, phrased so it makes sense months later without this conversation ' +
+				'around it. Do not save passwords or one-off details of the current task.',
+			parameters: {
+				type: 'object',
+				properties: {
+					content: {
+						type: 'string',
+						description: 'The fact to remember, as a complete standalone sentence.'
+					}
+				},
+				required: ['content']
+			}
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'recall',
+			description:
+				'Look up what you have remembered about this user. Call it when the answer ' +
+				'depends on their preferences, their setup, or anything they told you before.',
+			parameters: {
+				type: 'object',
+				properties: {
+					query: {
+						type: 'string',
+						description: 'What to look for. Leave empty to list the most recent memories.'
+					}
+				},
+				required: []
+			}
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'forget',
+			description:
+				'Delete one memory by its id, which `recall` returns. Use it when the user ' +
+				'says something you remembered is wrong or no longer true.',
+			parameters: {
+				type: 'object',
+				properties: { id: { type: 'string', description: 'The memory id from `recall`.' } },
+				required: ['id']
+			}
+		}
+	}
+] as const;
+
+export const FILE_TOOLS = [
+	{
+		type: 'function',
+		function: {
+			name: 'list_files',
+			description: "List the files in the user's workspace, with their names and sizes.",
+			parameters: { type: 'object', properties: {}, required: [] }
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'read_file',
+			description: 'Read one of the user’s files by name. Returns its text.',
+			parameters: {
+				type: 'object',
+				properties: { name: { type: 'string', description: 'The file name, or its id.' } },
+				required: ['name']
+			}
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'create_file',
+			description:
+				"Create a new text file in the user's workspace. Use this when they ask you " +
+				'to write something down, draft a document, or save output. The file appears ' +
+				'in their Files list and can be attached to later chats.',
+			parameters: {
+				type: 'object',
+				properties: {
+					name: { type: 'string', description: 'File name including an extension, e.g. notes.md' },
+					content: { type: 'string', description: 'The full text of the file.' }
+				},
+				required: ['name', 'content']
+			}
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'edit_file',
+			description:
+				'Replace an exact passage in one of the user’s files, leaving the rest ' +
+				'untouched. Prefer this over rewriting a file: pass enough surrounding text ' +
+				'that `old_text` appears exactly once. Read the file first if unsure.',
+			parameters: {
+				type: 'object',
+				properties: {
+					name: { type: 'string', description: 'The file name, or its id.' },
+					old_text: { type: 'string', description: 'The exact text to replace.' },
+					new_text: { type: 'string', description: 'What to put in its place.' },
+					replace_all: {
+						type: 'boolean',
+						description: 'Replace every occurrence instead of refusing when there are several.'
+					}
+				},
+				required: ['name', 'old_text', 'new_text']
+			}
+		}
+	}
+] as const;
+
+/** The tools a turn offers, in the order the model sees them. */
+export function toolsFor(enabled: { web?: boolean; memory?: boolean; files?: boolean }): unknown[] {
+	return [
+		...(enabled.web ? WEB_TOOLS : []),
+		...(enabled.memory ? MEMORY_TOOLS : []),
+		...(enabled.files ? FILE_TOOLS : [])
+	];
+}
+
+const plain = (content: string, status: string): ToolOutcome => ({ content, sources: [], status });
+
+/** Memory and file tools; returns null for anything it does not handle. */
+async function runUserDataTool(
+	env: Env,
+	call: ToolCall,
+	args: Record<string, any>,
+	context: ToolContext
+): Promise<ToolOutcome | null> {
+	const userId = context.userId;
+
+	switch (call.name) {
+		case 'remember': {
+			const content = String(args.content ?? '').trim();
+			if (!content) return plain('Nothing to remember — content was empty.', 'Nothing to remember');
+			const memory = await addMemory(env, userId, content);
+			return plain(`Remembered (id ${memory.id}).`, `Remembered: ${content.slice(0, 60)}`);
+		}
+
+		case 'recall': {
+			const rows = await queryMemories(env, userId, String(args.query ?? ''));
+			if (!rows.length)
+				return plain('Nothing has been remembered about this user yet.', 'No memories');
+			const listed = rows.map((row) => `- [${row.id}] ${row.content}`).join('\n');
+			return plain(
+				`What you remember about this user:\n${listed}`,
+				`Recalled ${rows.length} memories`
+			);
+		}
+
+		case 'forget': {
+			const id = String(args.id ?? '').trim();
+			const gone = await deleteMemory(env, userId, id);
+			return plain(
+				gone ? `Forgot memory ${id}.` : `There is no memory with id ${id}.`,
+				gone ? 'Forgot a memory' : 'No such memory'
+			);
+		}
+
+		case 'list_files': {
+			const files = await listUserFiles(env, userId);
+			if (!files.length) return plain('The workspace has no files.', 'No files');
+			const listed = files
+				.map((file) => `- ${file.filename} (${file.content.length} characters)`)
+				.join('\n');
+			return plain(`Files in the workspace:\n${listed}`, `Listed ${files.length} files`);
+		}
+
+		case 'read_file': {
+			const name = String(args.name ?? '').trim();
+			const file = await findUserFile(env, userId, name);
+			if (!file) return plain(`There is no file called ${name}.`, `No file named ${name}`);
+			if (!file.content) {
+				// Binary uploads carry no text: say why rather than returning blank.
+				return plain(
+					`${file.filename} has no extractable text. Only text files are decoded on upload.`,
+					`${file.filename} has no text`
+				);
+			}
+			return {
+				content: `<source id="1" name="${file.filename}">${file.content}</source>`,
+				sources: [
+					{
+						source: { id: file.id, name: file.filename },
+						document: [file.content],
+						metadata: [{ source: file.id, name: file.filename, file_id: file.id }]
+					}
+				],
+				status: `Read ${file.filename}`
+			};
+		}
+
+		case 'create_file': {
+			const name = String(args.name ?? '').trim();
+			const content = String(args.content ?? '');
+			if (!name) return plain('A file name is required.', 'Create called with no name');
+			const existing = await findUserFile(env, userId, name);
+			if (existing) {
+				// Overwriting silently would lose whatever was there; the model has
+				// edit_file for changes and can pick another name for a new file.
+				return plain(
+					`${name} already exists. Use edit_file to change it, or choose another name.`,
+					`${name} already exists`
+				);
+			}
+			const file = await createUserFile(env, userId, name, content);
+			return plain(
+				`Created ${file.filename} (${content.length} characters).`,
+				`Created ${file.filename}`
+			);
+		}
+
+		case 'edit_file': {
+			const name = String(args.name ?? '').trim();
+			const result = await editUserFile(
+				env,
+				userId,
+				name,
+				String(args.old_text ?? ''),
+				String(args.new_text ?? ''),
+				{ replaceAll: Boolean(args.replace_all) }
+			);
+			if (result.ok) {
+				return plain(
+					`Edited ${result.file.filename} (${result.replacements} replacement${result.replacements === 1 ? '' : 's'}).`,
+					`Edited ${result.file.filename}`
+				);
+			}
+			if (result.reason === 'not-found') {
+				return plain(`There is no file called ${name}.`, `No file named ${name}`);
+			}
+			if (result.reason === 'ambiguous') {
+				return plain(
+					`old_text appears ${result.occurrences} times in ${name}. Pass a longer, ` +
+						'unique excerpt, or set replace_all.',
+					`${name}: the text to replace is ambiguous`
+				);
+			}
+			return plain(
+				`old_text was not found in ${name}. Read the file and copy the passage exactly.`,
+				`${name}: no match for the text to replace`
+			);
+		}
+
+		default:
+			return null;
+	}
 }

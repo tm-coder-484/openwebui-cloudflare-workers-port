@@ -104,11 +104,45 @@ createServer(async (req, res) => {
 			return res.end(JSON.stringify({ error: { message: 'This model does not support tools' } }));
 		}
 
-		// `mock-tools` calls web_search once, then answers from what came back.
-		// The arguments are split across chunks the way real providers stream them.
+		// `mock-tools` calls one tool, then answers from what came back. Which tool
+		// is chosen by a TOOLTEST: marker in the conversation, so the smoke test can
+		// drive memory and file tools as well as search. The arguments are split
+		// across chunks the way real providers stream them.
 		const alreadyRan = (body.messages ?? []).some((message) => message.role === 'tool');
+		const conversation = JSON.stringify(body.messages ?? []);
+		const marker = /TOOLTEST:(\w+)(?:\s+([^"\\]*))?/.exec(conversation);
+		const toolCallFrames = () => {
+			const kind = marker?.[1];
+			const rest = (marker?.[2] ?? '').trim();
+			const one = (name, args) => [
+				{
+					index: 0,
+					id: `call_mock_${name}`,
+					type: 'function',
+					function: { name, arguments: JSON.stringify(args) }
+				}
+			];
+			if (kind === 'remember') return one('remember', { content: rest || 'a remembered fact' });
+			if (kind === 'recall') return one('recall', { query: rest });
+			if (kind === 'create')
+				return one('create_file', { name: 'agent-note.md', content: 'alpha\nbravo\ncharlie' });
+			if (kind === 'edit')
+				return one('edit_file', { name: 'agent-note.md', old_text: 'bravo', new_text: 'delta' });
+			if (kind === 'list') return one('list_files', {});
+			return [
+				{
+					index: 0,
+					id: 'call_mock_1',
+					type: 'function',
+					function: { name: 'web_search', arguments: '{"qu' }
+				},
+				{ index: 0, function: { arguments: 'ery":"cloud' } },
+				{ index: 0, function: { arguments: 'flare workers"}' } }
+			];
+		};
 		if (body.model === 'mock-tools' && body.tools && !alreadyRan) {
-			const frames = [
+			const frames = toolCallFrames();
+			const unusedFrames = [
 				{
 					index: 0,
 					id: 'call_mock_1',
