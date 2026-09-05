@@ -227,6 +227,7 @@
 					<SettingsSelect bind:value={webConfig.WEB_SEARCH_MODE} placeholder={$i18n.t('Always')}>
 						<option value="always">{$i18n.t('Always search')}</option>
 						<option value="tool">{$i18n.t('Model decides (tool calling)')}</option>
+						<option value="combo">{$i18n.t('Both: search first, model can search again')}</option>
 					</SettingsSelect>
 				</AdminSettingRow>
 
@@ -234,6 +235,12 @@
 					<div class="mb-2.5 text-xs text-gray-500 dark:text-gray-400">
 						{$i18n.t(
 							'The model is given web_search and web_fetch as tools and calls them when it judges a search is needed, up to three rounds. Needs a model that supports tool calling; if it does not, the turn falls back to searching first.'
+						)}
+					</div>
+				{:else if webConfig.WEB_SEARCH_MODE === 'combo'}
+					<div class="mb-2.5 text-xs text-gray-500 dark:text-gray-400">
+						{$i18n.t(
+							'One search runs before the turn, and the model keeps the tools — so it answers straight away when those results cover the question, and searches again when they do not. Costs one search per turn, like Always.'
 						)}
 					</div>
 				{/if}

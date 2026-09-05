@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { WEB_TOOLS, isToolsUnsupported, runToolCall, toolCallAccumulator } from '../src/lib/tools';
+import {
+	WEB_TOOLS,
+	isToolsUnsupported,
+	runToolCall,
+	searchPlan,
+	toolCallAccumulator
+} from '../src/lib/tools';
 import { normalizeChunk } from '../src/lib/completions';
 
 const envWithConfig = (rows: Record<string, unknown>) =>
@@ -195,5 +201,38 @@ describe('isToolsUnsupported', () => {
 	it('does not swallow unrelated failures', () => {
 		expect(isToolsUnsupported('rate limit exceeded')).toBe(false);
 		expect(isToolsUnsupported('context length exceeded')).toBe(false);
+	});
+});
+
+describe('searchPlan', () => {
+	it('searches before the turn in always mode, with no tools', () => {
+		expect(searchPlan('always', true, true)).toEqual({ preSearch: true, tools: false });
+	});
+
+	it('only offers tools in tool mode', () => {
+		expect(searchPlan('tool', true, true)).toEqual({ preSearch: false, tools: true });
+	});
+
+	it('does both in combo mode', () => {
+		// The point of combo: pages already in hand, and the option to look again.
+		expect(searchPlan('combo', true, true)).toEqual({ preSearch: true, tools: true });
+	});
+
+	it('falls back to searching first when tools are impossible', () => {
+		// Workers AI has no tool-calling shape, so a tool mode there must still
+		// search rather than quietly doing nothing.
+		expect(searchPlan('tool', true, false)).toEqual({ preSearch: true, tools: false });
+		expect(searchPlan('combo', true, false)).toEqual({ preSearch: true, tools: false });
+	});
+
+	it('does nothing at all when web search is off for the turn', () => {
+		for (const mode of ['always', 'tool', 'combo']) {
+			expect(searchPlan(mode, false, true)).toEqual({ preSearch: false, tools: false });
+		}
+	});
+
+	it('treats an unknown mode as always, not as nothing', () => {
+		expect(searchPlan('', true, true)).toEqual({ preSearch: true, tools: false });
+		expect(searchPlan('nonsense', true, true)).toEqual({ preSearch: true, tools: false });
 	});
 });

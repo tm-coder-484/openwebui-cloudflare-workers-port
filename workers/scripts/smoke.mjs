@@ -467,6 +467,115 @@ if (models.data?.length) {
 	console.log('  ! no models configured — completion check skipped');
 }
 
+// --- Long documents -------------------------------------------------------
+// Retrieval hands the model `top_k` chunks — three thousand characters by
+// default — however long the document is. The Documents screen has a switch for
+// giving it the whole file instead; this checks the switch actually does that.
+if (isAdmin && models.data?.length) {
+	console.log('\nlong documents');
+
+	const LONG = Array.from(
+		{ length: 700 },
+		(_, i) => `Section ${i}: Durable Objects give a Worker single-threaded consistency.`
+	).join('\n');
+	let longFileId = '';
+
+	const askAboutFile = async () => {
+		const socket = await connectSocket(token);
+		try {
+			socket.resetEvents();
+			const messageId = crypto.randomUUID();
+			const done = socket.waitFor(messageId);
+			await api('/api/chat/completions', {
+				method: 'POST',
+				body: JSON.stringify({
+					stream: true,
+					model: models.data[0].id,
+					messages: [{ role: 'user', content: 'Summarise the attached document.' }],
+					files: [{ type: 'file', id: longFileId, name: 'long.txt' }],
+					id: messageId,
+					parent_id: null,
+					session_id: socket.sid,
+					user_message: {
+						id: crypto.randomUUID(),
+						parentId: null,
+						childrenIds: [],
+						role: 'user',
+						content: 'Summarise the attached document.'
+					},
+					background_tasks: {}
+				})
+			});
+			await done;
+			return socket.sourceDocs.join('').length;
+		} finally {
+			socket.close();
+		}
+	};
+
+	await check('upload a long document', async () => {
+		const form = new FormData();
+		form.append('file', new Blob([LONG], { type: 'text/plain' }), 'long.txt');
+		const response = await fetch(`${BASE}/api/v1/files/`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}` },
+			body: form
+		});
+		assert(response.ok, `upload failed: ${response.status}`);
+		longFileId = (await response.json()).id;
+		assert(longFileId, 'no file id');
+		assert(LONG.length > 40000, 'the fixture is not long enough to prove anything');
+	});
+
+	await check('retrieval mode sends a small slice of it', async () => {
+		await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({ RAG_FULL_CONTEXT: false, BYPASS_EMBEDDING_AND_RETRIEVAL: false })
+		});
+		// Indexing is queued behind the upload response; give it a moment.
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		const delivered = await askAboutFile();
+		assert(delivered > 0, 'no document text reached the model at all');
+		assert(
+			delivered < LONG.length / 2,
+			`expected a retrieved slice, got ${delivered} of ${LONG.length} characters`
+		);
+	});
+
+	await check('full context mode sends the whole document', async () => {
+		const saved = await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({ RAG_FULL_CONTEXT: true })
+		});
+		assert(saved.RAG_FULL_CONTEXT === true, 'the full-context switch was not saved');
+		const delivered = await askAboutFile();
+		assert(
+			delivered >= LONG.length,
+			`only ${delivered} of ${LONG.length} characters reached the model`
+		);
+	});
+
+	await check('the bypass switch persists and does the same', async () => {
+		const saved = await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({
+				RAG_FULL_CONTEXT: false,
+				BYPASS_EMBEDDING_AND_RETRIEVAL: true
+			})
+		});
+		assert(saved.BYPASS_EMBEDDING_AND_RETRIEVAL === true, 'the bypass switch was dropped on save');
+		const delivered = await askAboutFile();
+		assert(
+			delivered >= LONG.length,
+			`only ${delivered} of ${LONG.length} characters reached the model`
+		);
+		await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({ BYPASS_EMBEDDING_AND_RETRIEVAL: false })
+		});
+	});
+}
+
 // --- Model-invoked web search --------------------------------------------
 // The other web-search mode: instead of searching before every turn, the model
 // is given `web_search`/`web_fetch` as tools and decides for itself. Needs both
@@ -549,6 +658,38 @@ if (isAdmin && searchMockUp && toolModels.includes('mock-tools')) {
 			turn.statuses.some((line) => /Searching the web|Searched the web/.test(line)),
 			`no pre-search status after the fallback: ${JSON.stringify(turn.statuses)}`
 		);
+	});
+
+	await check('combo mode searches first and still leaves the model its tools', async () => {
+		await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({ web: { WEB_SEARCH_MODE: 'combo' } })
+		});
+		const turn = await runTurn('mock-tools', 'What is Cloudflare Workers?');
+
+		// The pre-search query comes from the task model; the tool query is the
+		// model's own. Both statuses prove combo did both things.
+		assert(
+			turn.statuses.some((line) => /Searching the web|Searched the web \(/.test(line)),
+			`no pre-search status: ${JSON.stringify(turn.statuses)}`
+		);
+		assert(
+			turn.statuses.some((line) => line.includes('cloudflare workers')),
+			`the model never got to call the tool: ${JSON.stringify(turn.statuses)}`
+		);
+		assert(turn.content.trim().length > 0, 'no answer was produced');
+	});
+
+	await check('combo mode does not search twice when the model refuses tools', async () => {
+		// The pre-search has already run by the time the endpoint rejects `tools`,
+		// so the fallback must not run it again.
+		const turn = await runTurn('mock-no-tools', 'What is Cloudflare Workers?');
+		const searches = turn.statuses.filter((line) => /^Searching the web for/.test(line));
+		assert(
+			searches.length === 1,
+			`expected one search, saw ${searches.length}: ${JSON.stringify(searches)}`
+		);
+		assert(turn.content.trim().length > 0, 'no answer was produced');
 	});
 
 	await check('put web search back into always mode', async () => {
@@ -753,6 +894,7 @@ async function connectSocket(authToken) {
 	let sid = null;
 	let sources = 0;
 	const statusLines = [];
+	const sourceDocs = [];
 
 	await new Promise((resolve, reject) => {
 		const timer = setTimeout(() => reject(new Error('socket connect timed out')), 15000);
@@ -782,7 +924,10 @@ async function connectSocket(authToken) {
 					return;
 				}
 				if (name !== 'events') return;
-				if (payload.data?.type === 'source') sources += 1;
+				if (payload.data?.type === 'source') {
+					sources += 1;
+					for (const doc of payload.data?.data?.document ?? []) sourceDocs.push(String(doc));
+				}
 				if (payload.data?.type === 'status') {
 					statusLines.push(String(payload.data?.data?.description ?? ''));
 				}
@@ -804,8 +949,12 @@ async function connectSocket(authToken) {
 		get sourceCount() {
 			return sources;
 		},
+		get sourceDocs() {
+			return sourceDocs;
+		},
 		resetEvents() {
 			statusLines.length = 0;
+			sourceDocs.length = 0;
 			sources = 0;
 		},
 		waitFor(messageId) {

@@ -302,7 +302,36 @@ npx wrangler vectorize create open-webui --dimensions=768 --metric=cosine
 
 Without Vectorize, retrieval falls back to TF-IDF-style keyword scoring over the
 chunks stored in D1 — good enough for small knowledge bases, and it needs no
-extra services.
+extra services. When a query shares no term at all with the document — "summarise
+the attached document" usually does not — the opening chunks are returned rather
+than nothing, so an attachment always contributes something.
+
+**How much of an attached document reaches the model.** By default, retrieval,
+which means `rag.top_k` chunks of `rag.chunk_size` characters each: **three
+thousand characters**, however long the file is. That is the right trade for a
+knowledge base of hundreds of files and the wrong one for "read this and
+summarise it".
+
+Two switches under **Admin Settings → Documents** hand over whole documents
+instead, and mean the same thing here:
+
+| Setting                        | Config key             |
+| ------------------------------ | ---------------------- |
+| Full Context Mode              | `rag.full_context`     |
+| Bypass Embedding and Retrieval | `rag.bypass_embedding` |
+
+With either on, every attached file — and every file in an attached knowledge
+base — is passed in full. There is no cap: that is what the setting means, so a
+document larger than the model's context window is rejected by the provider,
+which reports it as a context-length error. Raising **Top K** and **Chunk Size**
+is the middle ground if you want more than three thousand characters without
+sending everything.
+
+**Only text is extracted.** A `.txt`, `.md`, `.csv`, `.json`, source file and
+similar are decoded and indexed; a PDF, `.docx` or image is stored in R2 and
+served back intact, but contributes no text to a conversation, because
+extracting it needs native libraries that do not run on Workers. Convert to text
+before uploading, or paste the content.
 
 ### Automations
 
@@ -502,27 +531,40 @@ results, reports progress through the same `status` events as upstream, injects
 the pages as `<source>` context, and stores them as files so the answer carries
 citations.
 
-**Two search modes**, set by **Search Mode** under Admin Settings → Web Search
+**Three search modes**, set by **Search Mode** under Admin Settings → Web Search
 (`WEB_SEARCH_MODE`, or `web.search.mode`):
 
 | Mode               | What happens                                                                              |
 | ------------------ | ----------------------------------------------------------------------------------------- |
 | `always` (default) | One search before the model runs, on a query the task model writes from the conversation. |
 | `tool`             | The model is given `web_search` and `web_fetch` as functions and calls them itself.       |
+| `combo`            | Both: search first, and the model keeps the tools to search again.                        |
 
 `always` is predictable and costs one search per turn whether or not the
 question needs one. `tool` lets the model skip the search entirely when it
 already knows the answer, choose its own query, read a specific result with
 `web_fetch`, and search again with what it learned — up to three rounds, after
-which it has to answer. Both modes emit the same status and source events, so
-citations render identically.
+which it has to answer.
 
-`tool` mode needs a model that supports tool calling, and an OpenAI-compatible
-connection: the Workers AI binding has no tool-calling shape, so Workers AI
-models stay on `always`. If the endpoint rejects the request because the model
-cannot do tool calling, the turn does not fail — it falls back to searching
-first and asks again without tools, which is why this is safe to leave on for a
-mixed set of models.
+`combo` is the two together, and the mode to pick when you want search to be
+reliable rather than cheap: the model starts with pages already retrieved, so it
+answers immediately when they cover the question, and it still holds the tools
+for when they do not. `always` cannot do the second; `tool` pays a round trip
+before it has anything to read, and depends on the model choosing to search at
+all. The injected context says outright that the tools are still available, so
+"these pages do not answer it" leads to another search rather than an apology.
+Cost is the same one search per turn as `always`, plus whatever the model adds.
+
+All three modes emit the same status and source events, so citations render
+identically.
+
+`tool` and `combo` need a model that supports tool calling, and an
+OpenAI-compatible connection: the Workers AI binding has no tool-calling shape,
+so Workers AI models stay on `always`. If the endpoint rejects the request
+because the model cannot do tool calling, the turn does not fail — it falls back
+to searching first and asks again without tools, which is why these are safe to
+leave on for a mixed set of models. In `combo` that fallback costs nothing
+extra, since the search has already run.
 
 **Fetching one page.** Independently of search, `POST /api/v1/retrieval/process/web`
 with `{"url": "..."}` fetches a page, reduces it to text, stores it as a file
