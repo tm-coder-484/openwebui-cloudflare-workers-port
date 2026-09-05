@@ -814,6 +814,148 @@ if (models.data?.some((model) => model.id === 'mock-reasoner')) {
 		);
 	});
 
+	// A turn runs in the Durable Object that owns the socket, so it outlives the
+	// page that started it. These three checks are about what a reader gets back
+	// when they come back to it.
+	const startTurn = async (chatId, prompt) => {
+		const socket = await connectSocket(token);
+		const messageId = crypto.randomUUID();
+		socket.waitFor(messageId).catch(() => {});
+		await api('/api/chat/completions', {
+			method: 'POST',
+			body: JSON.stringify({
+				stream: true,
+				model: 'mock-gpt',
+				chat_id: chatId,
+				messages: [{ role: 'user', content: prompt }],
+				id: messageId,
+				parent_id: null,
+				session_id: socket.sid,
+				user_message: {
+					id: crypto.randomUUID(),
+					parentId: null,
+					childrenIds: [],
+					role: 'user',
+					content: prompt
+				},
+				background_tasks: {}
+			})
+		});
+		return { socket, messageId };
+	};
+
+	const newChat = () =>
+		api('/api/v1/chats/new', {
+			method: 'POST',
+			body: JSON.stringify({
+				chat: {
+					title: 'Streaming',
+					models: ['mock-gpt'],
+					history: { messages: {}, currentId: null },
+					messages: []
+				}
+			})
+		});
+
+	const storedAnswer = async (chatId) => {
+		const row = await api(`/api/v1/chats/${chatId}`);
+		const messages = Object.values(row?.chat?.history?.messages ?? {});
+		return messages.find((message) => message.role === 'assistant') ?? null;
+	};
+
+	// Long enough that the answer takes more than one save interval to write.
+	const LONG_PROMPT =
+		'Tell me about Cloudflare Workers, D1, R2, KV, Durable Objects, Queues, ' +
+		'Vectorize, Hyperdrive and Workers AI in as much detail as you can manage.';
+
+	await check('the answer is saved while it is still being written', async () => {
+		// Until it was, a reload during a turn found the message there and empty,
+		// and it stayed empty for as long as the model took.
+		const chat = await newChat();
+		const { socket } = await startTurn(chat.id, LONG_PROMPT);
+		try {
+			let grew = false;
+			let previous = 0;
+			for (let i = 0; i < 12; i += 1) {
+				await new Promise((resolve) => setTimeout(resolve, 400));
+				const message = await storedAnswer(chat.id);
+				const length = String(message?.content ?? '').length;
+				if (length > previous && !message?.done) grew = true;
+				previous = length;
+				if (message?.done) break;
+			}
+			assert(grew, 'the stored answer never grew before the turn finished');
+		} finally {
+			socket.close();
+		}
+	});
+
+	await check('a turn that is still running says so', async () => {
+		// A page that reloads mid-answer asks this. Answering "nothing running"
+		// while tokens are still coming makes it settle on a half-written reply.
+		const chat = await newChat();
+		assert(
+			(await api(`/api/tasks/chat/${chat.id}`)).task_ids.length === 0,
+			'a chat with no turn reported one'
+		);
+
+		const { socket } = await startTurn(chat.id, LONG_PROMPT);
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 600));
+			const during = await api(`/api/tasks/chat/${chat.id}`);
+			assert(
+				during.task_ids.length === 1,
+				`expected one running turn, got ${JSON.stringify(during)}`
+			);
+
+			for (let i = 0; i < 30; i += 1) {
+				await new Promise((resolve) => setTimeout(resolve, 400));
+				if ((await storedAnswer(chat.id))?.done) break;
+			}
+			const after = await api(`/api/tasks/chat/${chat.id}`);
+			assert(
+				after.task_ids.length === 0,
+				`the finished turn is still listed: ${JSON.stringify(after)}`
+			);
+		} finally {
+			socket.close();
+		}
+	});
+
+	await check('stop stops, and keeps what was written', async () => {
+		// This endpoint answered {status:true} and did nothing: the turn carried
+		// on, billing for every token, and overwrote the message when it finished.
+		const chat = await newChat();
+		const { socket } = await startTurn(chat.id, LONG_PROMPT);
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 800));
+			const before = await storedAnswer(chat.id);
+			const stopped = await api(`/api/tasks/chat/${chat.id}/stop`, { method: 'POST' });
+			assert(
+				(stopped.task_ids ?? []).length === 1,
+				`stop reported nothing stopped: ${JSON.stringify(stopped)}`
+			);
+
+			await new Promise((resolve) => setTimeout(resolve, 1200));
+			const justAfter = await storedAnswer(chat.id);
+			assert(justAfter?.done === true, 'a stopped turn left the message unfinished');
+			assert(
+				String(justAfter.content).length >= String(before?.content ?? '').length,
+				'stopping discarded what had already been written'
+			);
+
+			// And it really stopped rather than merely being marked so.
+			await new Promise((resolve) => setTimeout(resolve, 2500));
+			const later = await storedAnswer(chat.id);
+			assert(
+				String(later.content).length === String(justAfter.content).length,
+				'the answer kept growing after it was stopped'
+			);
+		} finally {
+			socket.close();
+		}
+	});
+
 	await check('a past turn goes back as the answer, not the markup', async () => {
 		// A stored message carries the chat screen's markup: the reasoning block,
 		// the tool call. Sent back it fills the context the model needs to think
