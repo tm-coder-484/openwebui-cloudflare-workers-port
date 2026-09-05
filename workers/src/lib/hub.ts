@@ -40,6 +40,55 @@ export async function startCompletion(env: Env, job: CompletionJob): Promise<voi
 	});
 }
 
+/**
+ * The turns still running for a chat, as the object running them sees it.
+ *
+ * An empty list is a real answer — the turn finished — so a failure to reach
+ * the hub must not look like one. It returns null instead, and the caller says
+ * so rather than telling a reloading page the answer has arrived.
+ */
+export async function runningTasks(
+	env: Env,
+	chatId: string,
+	userId: string
+): Promise<string[] | null> {
+	try {
+		const response = await hubStub(env).fetch(
+			`https://hub/tasks?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(userId)}`
+		);
+		const body = (await response.json()) as { task_ids?: string[] };
+		return body.task_ids ?? [];
+	} catch (error) {
+		console.warn('[open-webui] could not read running tasks:', error);
+		return null;
+	}
+}
+
+/**
+ * Stops running turns: one by task id, or every turn of a chat.
+ *
+ * Returns the ids that were actually stopped, which is empty when the turn had
+ * already finished — a Stop pressed a moment too late is not an error.
+ */
+export async function stopTasks(
+	env: Env,
+	userId: string,
+	target: { taskId?: string; chatId?: string }
+): Promise<string[]> {
+	try {
+		const response = await hubStub(env).fetch('https://hub/tasks/stop', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ userId, ...target })
+		});
+		const body = (await response.json()) as { task_ids?: string[] };
+		return body.task_ids ?? [];
+	} catch (error) {
+		console.warn('[open-webui] could not stop tasks:', error);
+		return [];
+	}
+}
+
 export async function hubStats(
 	env: Env
 ): Promise<{ sessions: number; users: number; models_in_use: string[] }> {

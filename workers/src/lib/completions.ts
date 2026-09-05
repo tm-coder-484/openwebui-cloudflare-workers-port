@@ -584,7 +584,17 @@ function openReasoningBlock() {
 export async function runCompletion(
 	env: Env,
 	job: CompletionJob,
-	emit: EventEmitter
+	emit: EventEmitter,
+	/**
+	 * Aborted when the reader presses Stop.
+	 *
+	 * The stream is abandoned rather than the request cancelled: dropping out of
+	 * the read loop closes the upstream body, and the turn then ends the way any
+	 * other does, so whatever had been written is saved and the message is
+	 * marked finished. A stop that left the message unfinished would be a worse
+	 * outcome than the one it interrupted.
+	 */
+	signal?: AbortSignal
 ): Promise<void> {
 	const emitCompletion = (data: Record<string, unknown>) =>
 		emit({
@@ -838,6 +848,7 @@ export async function runCompletion(
 				const pending = toolCallAccumulator();
 				try {
 					for await (const chunk of streamUpstream(env, roundRequest)) {
+						if (signal?.aborted) break;
 						if (chunk.usage) usage = chunk.usage;
 						if (chunk.toolCalls) pending.push(chunk.toolCalls);
 						if (chunk.reasoning) {
@@ -873,6 +884,9 @@ export async function runCompletion(
 
 				const calls = pending.calls();
 				if (!calls.length) break;
+				// Stopped mid-turn: the tools the model asked for are not run, and no
+				// further round is started.
+				if (signal?.aborted) break;
 
 				// The model's own turn has to go back verbatim, tool calls included,
 				// or the follow-up messages have nothing to answer.

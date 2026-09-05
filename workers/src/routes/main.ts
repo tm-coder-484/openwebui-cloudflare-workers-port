@@ -10,7 +10,7 @@ import { hasUsers } from '../lib/users';
 import { WEBUI_VERSION } from '../lib/version';
 import { getAllModels, getBaseModels, filterModelsForUser } from '../lib/models';
 import { insertChat, getUserChat, upsertMessage, type ChatContent } from '../lib/chats';
-import { hubStats, startCompletion, emitToUser } from '../lib/hub';
+import { emitToUser, hubStats, runningTasks, startCompletion, stopTasks } from '../lib/hub';
 import { bad, notFound, now, uuid } from '../lib/util';
 
 const app = new Hono<AppContext>({ strict: false });
@@ -412,19 +412,46 @@ app.post('/api/chat/actions/:id', async (c) => {
 	return c.json(body);
 });
 
+/**
+ * Stop generating.
+ *
+ * Both of these answered `{status: true}` and did nothing, so the Stop button
+ * ended the reader's view of a turn that carried on regardless — billing for
+ * every token it went on to produce, and overwriting the message when it
+ * finished.
+ *
+ * Stopping abandons the stream rather than discarding the turn: whatever had
+ * been written is kept and the message is marked finished, which is what a
+ * reader means by Stop.
+ */
 app.post('/api/tasks/stop/:id', async (c) => {
-	verifiedUser(c);
-	return c.json({ status: true });
+	const user = verifiedUser(c);
+	const stopped = await stopTasks(c.env, user.id, { taskId: c.req.param('id') });
+	return c.json({ status: true, task_ids: stopped });
 });
 
 app.post('/api/tasks/chat/:id/stop', async (c) => {
-	verifiedUser(c);
-	return c.json({ status: true });
+	const user = verifiedUser(c);
+	const stopped = await stopTasks(c.env, user.id, { chatId: c.req.param('id') });
+	return c.json({ status: true, task_ids: stopped });
 });
 
+/**
+ * The turns still running for a chat.
+ *
+ * The frontend asks this after a reconnect when the chat has an assistant
+ * message that never finished. An empty list means the turn ended while the
+ * page was away, and it reloads the chat to pick up the ending; a non-empty one
+ * means tokens are still coming and it should wait rather than redraw.
+ *
+ * This answered `[]` unconditionally, so a page that reloaded mid-answer was
+ * told the turn was over and settled on however much had been written.
+ */
 app.get('/api/tasks/chat/:id', async (c) => {
-	verifiedUser(c);
-	return c.json({ task_ids: [] });
+	const user = verifiedUser(c);
+	const taskIds = await runningTasks(c.env, c.req.param('id'), user.id);
+	// Unreachable hub: say nothing is known rather than claim the turn is done.
+	return c.json({ task_ids: taskIds ?? [] });
 });
 
 export default app;
