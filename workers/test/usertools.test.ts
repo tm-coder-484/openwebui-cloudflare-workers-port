@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FILE_TOOLS, MEMORY_TOOLS, runToolCall, toolsFor } from '../src/lib/tools';
+import { FILE_TOOLS, MEMORY_TOOLS, SEARCH_TOOLS, runToolCall, toolsFor } from '../src/lib/tools';
+import { globToRegExp } from '../src/lib/workspace';
 
 /**
  * A D1 + R2 stub backed by plain arrays, enough for the memory and file tools.
@@ -119,10 +120,15 @@ describe('tool groups', () => {
 			'create_file',
 			'edit_file'
 		]);
+		expect((toolsFor({ search: true }) as any[]).map((t) => t.function.name)).toEqual([
+			'glob_files',
+			'grep_files',
+			'search_chats'
+		]);
 	});
 
 	it('describes every tool in the OpenAI function shape', () => {
-		for (const tool of [...MEMORY_TOOLS, ...FILE_TOOLS]) {
+		for (const tool of [...MEMORY_TOOLS, ...FILE_TOOLS, ...SEARCH_TOOLS]) {
 			expect(tool.type).toBe('function');
 			expect(tool.function.description.length).toBeGreaterThan(20);
 			expect(tool.function.parameters.type).toBe('object');
@@ -243,7 +249,9 @@ describe('file tools', () => {
 		const read = await runToolCall(fake.env, call('read_file', { name: 'notes.md' }), {
 			userId: 'u1'
 		});
-		expect(read.content).toContain('Alpha\nDelta\nCharlie');
+		expect(read.content).toContain('1\tAlpha');
+		expect(read.content).toContain('2\tDelta');
+		expect(read.content).toContain('3\tCharlie');
 	});
 
 	it('refuses an ambiguous edit rather than guessing', async () => {
@@ -257,7 +265,9 @@ describe('file tools', () => {
 		const read = await runToolCall(fake.env, call('read_file', { name: 'notes.md' }), {
 			userId: 'u1'
 		});
-		expect(read.content).toContain('todo\ntodo\ntodo');
+		expect(read.content).toContain('1\ttodo');
+		expect(read.content).toContain('3\ttodo');
+		expect(read.content).not.toContain('done');
 	});
 
 	it('replaces every occurrence when told to', async () => {
@@ -275,7 +285,8 @@ describe('file tools', () => {
 		const read = await runToolCall(fake.env, call('read_file', { name: 'notes.md' }), {
 			userId: 'u1'
 		});
-		expect(read.content).toContain('done\ndone');
+		expect(read.content).toContain('1\tdone');
+		expect(read.content).toContain('2\tdone');
 	});
 
 	it('tells the model to copy the passage exactly when nothing matched', async () => {
@@ -306,5 +317,126 @@ describe('file tools', () => {
 
 		const listed = await runToolCall(fake.env, call('list_files', {}), { userId: 'u2' });
 		expect(listed.content).toMatch(/no files/i);
+	});
+});
+
+describe('glob matching', () => {
+	it('translates the glob syntax people actually type', () => {
+		expect(globToRegExp('*.md').test('notes.md')).toBe(true);
+		expect(globToRegExp('*.md').test('notes.txt')).toBe(false);
+		expect(globToRegExp('notes-*').test('notes-2026.md')).toBe(true);
+		expect(globToRegExp('report?.csv').test('report1.csv')).toBe(true);
+		expect(globToRegExp('report?.csv').test('report12.csv')).toBe(false);
+	});
+
+	it('keeps `*` inside one path segment and lets `**` cross them', () => {
+		expect(globToRegExp('*.md').test('docs/notes.md')).toBe(false);
+		expect(globToRegExp('**/*.md').test('docs/notes.md')).toBe(true);
+	});
+
+	it('treats regex metacharacters in a glob as literals', () => {
+		// `notes.md` must not match `notesXmd` just because `.` is a regex dot.
+		expect(globToRegExp('notes.md').test('notesXmd')).toBe(false);
+		expect(globToRegExp('a+b.txt').test('a+b.txt')).toBe(true);
+	});
+});
+
+describe('search tools', () => {
+	let fake: ReturnType<typeof fakeEnv>;
+	beforeEach(() => {
+		fake = fakeEnv();
+	});
+
+	const create = (name: string, content: string, userId = 'u1') =>
+		runToolCall(fake.env, call('create_file', { name, content }), { userId });
+
+	it('finds files by name pattern', async () => {
+		await create('notes.md', 'x');
+		await create('data.csv', 'y');
+		const out = await runToolCall(fake.env, call('glob_files', { pattern: '*.md' }), {
+			userId: 'u1'
+		});
+		expect(out.content).toContain('notes.md');
+		expect(out.content).not.toContain('data.csv');
+	});
+
+	it('greps contents and reports file and line', async () => {
+		await create('notes.md', 'alpha\nbravo TODO fix\ncharlie');
+		const out = await runToolCall(fake.env, call('grep_files', { pattern: 'TODO' }), {
+			userId: 'u1'
+		});
+		expect(out.content).toContain('notes.md:2:');
+		expect(out.content).toContain('bravo TODO fix');
+	});
+
+	it('narrows a grep with a glob', async () => {
+		await create('notes.md', 'needle');
+		await create('data.csv', 'needle');
+		const out = await runToolCall(
+			fake.env,
+			call('grep_files', { pattern: 'needle', glob: '*.csv' }),
+			{ userId: 'u1' }
+		);
+		expect(out.content).toContain('data.csv');
+		expect(out.content).not.toContain('notes.md');
+	});
+
+	it('reports an invalid regex instead of throwing', async () => {
+		await create('notes.md', 'anything');
+		const out = await runToolCall(fake.env, call('grep_files', { pattern: '([' }), {
+			userId: 'u1'
+		});
+		expect(out.content).toMatch(/not a valid regular expression/i);
+	});
+
+	it('refuses a pattern too long to be a search', async () => {
+		const out = await runToolCall(fake.env, call('grep_files', { pattern: 'a'.repeat(300) }), {
+			userId: 'u1'
+		});
+		expect(out.content).toMatch(/longer than 200/i);
+	});
+
+	it('cannot glob or grep another user’s files', async () => {
+		await create('private.md', 'user one secret', 'u1');
+		const globbed = await runToolCall(fake.env, call('glob_files', { pattern: '*' }), {
+			userId: 'u2'
+		});
+		expect(globbed.content).not.toContain('private.md');
+		const grepped = await runToolCall(fake.env, call('grep_files', { pattern: 'secret' }), {
+			userId: 'u2'
+		});
+		expect(grepped.content).not.toContain('user one secret');
+	});
+});
+
+describe('read_file ranges', () => {
+	let fake: ReturnType<typeof fakeEnv>;
+	beforeEach(() => {
+		fake = fakeEnv();
+	});
+
+	it('numbers lines so a grep hit can be cited', async () => {
+		await runToolCall(fake.env, call('create_file', { name: 'a.md', content: 'one\ntwo\nthree' }), {
+			userId: 'u1'
+		});
+		const out = await runToolCall(fake.env, call('read_file', { name: 'a.md' }), { userId: 'u1' });
+		expect(out.content).toContain('1\tone');
+		expect(out.content).toContain('3\tthree');
+	});
+
+	it('reads a window of a long file and says which lines it gave', async () => {
+		const content = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n');
+		await runToolCall(fake.env, call('create_file', { name: 'long.md', content }), {
+			userId: 'u1'
+		});
+		const out = await runToolCall(
+			fake.env,
+			call('read_file', { name: 'long.md', offset: 10, limit: 3 }),
+			{ userId: 'u1' }
+		);
+		expect(out.content).toContain('10\tline 10');
+		expect(out.content).toContain('12\tline 12');
+		expect(out.content).not.toContain('13\tline 13');
+		expect(out.status).toContain('lines 10-12 of 50');
 	});
 });

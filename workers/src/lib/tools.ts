@@ -16,6 +16,7 @@ import type { Env } from '../types';
 import { fetchPageText, resultText, webSearch } from './websearch';
 import { addMemory, deleteMemory, queryMemories } from './memories';
 import { createUserFile, editUserFile, findUserFile, listUserFiles } from './userfiles';
+import { globFiles, grepFiles, searchChats } from './workspace';
 
 export interface ToolCall {
 	id: string;
@@ -145,6 +146,9 @@ export async function runToolCall(
 
 	const userData = await runUserDataTool(env, call, args, context);
 	if (userData) return userData;
+
+	const workspace = await runWorkspaceTool(env, call, args, context);
+	if (workspace) return workspace;
 
 	if (call.name === 'web_search') {
 		const query = String(args.query ?? '').trim();
@@ -326,10 +330,17 @@ export const FILE_TOOLS = [
 		type: 'function',
 		function: {
 			name: 'read_file',
-			description: 'Read one of the user’s files by name. Returns its text.',
+			description:
+				'Read one of the user’s files by name. Returns its text with line numbers. ' +
+				'For a long file, read the part you need with offset and limit rather than ' +
+				'the whole thing.',
 			parameters: {
 				type: 'object',
-				properties: { name: { type: 'string', description: 'The file name, or its id.' } },
+				properties: {
+					name: { type: 'string', description: 'The file name, or its id.' },
+					offset: { type: 'integer', description: 'First line to return, 1-based.' },
+					limit: { type: 'integer', description: 'How many lines to return.' }
+				},
 				required: ['name']
 			}
 		}
@@ -378,11 +389,17 @@ export const FILE_TOOLS = [
 ] as const;
 
 /** The tools a turn offers, in the order the model sees them. */
-export function toolsFor(enabled: { web?: boolean; memory?: boolean; files?: boolean }): unknown[] {
+export function toolsFor(enabled: {
+	web?: boolean;
+	memory?: boolean;
+	files?: boolean;
+	search?: boolean;
+}): unknown[] {
 	return [
 		...(enabled.web ? WEB_TOOLS : []),
 		...(enabled.memory ? MEMORY_TOOLS : []),
-		...(enabled.files ? FILE_TOOLS : [])
+		...(enabled.files ? FILE_TOOLS : []),
+		...(enabled.search ? SEARCH_TOOLS : [])
 	];
 }
 
@@ -445,16 +462,29 @@ async function runUserDataTool(
 					`${file.filename} has no text`
 				);
 			}
+
+			const lines = file.content.split('\n');
+			const offset = Math.max(1, Number(args.offset) || 1);
+			const limit = Number(args.limit) > 0 ? Number(args.limit) : lines.length;
+			const slice = lines.slice(offset - 1, offset - 1 + limit);
+			// Numbered, so a line from grep_files can be asked for by number and the
+			// model can cite where in the file something came from.
+			const body = slice.map((line, index) => `${offset + index}\t${line}`).join('\n');
+			const range =
+				slice.length === lines.length
+					? `${lines.length} lines`
+					: `lines ${offset}-${offset + slice.length - 1} of ${lines.length}`;
+
 			return {
-				content: `<source id="1" name="${file.filename}">${file.content}</source>`,
+				content: `<source id="1" name="${file.filename}">${body}</source>`,
 				sources: [
 					{
 						source: { id: file.id, name: file.filename },
-						document: [file.content],
+						document: [slice.join('\n')],
 						metadata: [{ source: file.id, name: file.filename, file_id: file.id }]
 					}
 				],
-				status: `Read ${file.filename}`
+				status: `Read ${file.filename} (${range})`
 			};
 		}
 
@@ -513,4 +543,128 @@ async function runUserDataTool(
 		default:
 			return null;
 	}
+}
+
+/**
+ * Finding things, as opposed to reading or changing them.
+ *
+ * `glob_files` and `grep_files` are the workspace equivalents of the tools a
+ * coding assistant uses to orient itself. `search_chats` has no shell
+ * equivalent at all and is the most useful of the three here: the user's own
+ * history is a corpus they cannot grep any other way.
+ */
+export const SEARCH_TOOLS = [
+	{
+		type: 'function',
+		function: {
+			name: 'glob_files',
+			description:
+				"Find the user's files by name pattern — `*.md`, `notes-*`, `**/*.csv`. " +
+				'Use it before reading when you are not sure of the exact name.',
+			parameters: {
+				type: 'object',
+				properties: {
+					pattern: { type: 'string', description: 'A glob pattern matched against file names.' }
+				},
+				required: ['pattern']
+			}
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'grep_files',
+			description:
+				"Search the contents of the user's files with a regular expression. Returns " +
+				'each matching line with its file and line number, which read_file can then ' +
+				'read around. Prefer this over reading whole files to find something.',
+			parameters: {
+				type: 'object',
+				properties: {
+					pattern: { type: 'string', description: 'A JavaScript regular expression.' },
+					glob: { type: 'string', description: 'Only search files whose name matches this glob.' },
+					case_sensitive: { type: 'boolean', description: 'Match case exactly. Defaults to false.' }
+				},
+				required: ['pattern']
+			}
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'search_chats',
+			description:
+				'Search the user’s own past conversations. Use it when they refer to ' +
+				'something discussed before — "what did we decide about X", "the approach I ' +
+				'mentioned last week" — or to avoid contradicting an earlier answer.',
+			parameters: {
+				type: 'object',
+				properties: {
+					query: { type: 'string', description: 'What to look for in earlier messages.' }
+				},
+				required: ['query']
+			}
+		}
+	}
+] as const;
+
+/** Memory, file and search tools; returns null for anything it does not handle. */
+async function runWorkspaceTool(
+	env: Env,
+	call: ToolCall,
+	args: Record<string, any>,
+	context: ToolContext
+): Promise<ToolOutcome | null> {
+	const userId = context.userId;
+
+	if (call.name === 'glob_files') {
+		const pattern = String(args.pattern ?? '*');
+		const hits = await globFiles(env, userId, pattern);
+		if (!hits.length) return plain(`No files match ${pattern}.`, `No files match ${pattern}`);
+		const listed = hits.map((hit) => `- ${hit.filename} (${hit.characters} characters)`).join('\n');
+		return plain(`Files matching ${pattern}:\n${listed}`, `${hits.length} files match ${pattern}`);
+	}
+
+	if (call.name === 'grep_files') {
+		const pattern = String(args.pattern ?? '');
+		const result = await grepFiles(env, userId, pattern, {
+			glob: args.glob ? String(args.glob) : undefined,
+			ignoreCase: args.case_sensitive ? false : true
+		});
+		if (result.error) return plain(result.error, `grep_files: ${result.error}`);
+		if (!result.hits.length) {
+			return plain(
+				`No matches for /${pattern}/ in ${result.filesSearched} files.`,
+				`No matches for ${pattern}`
+			);
+		}
+		const listed = result.hits.map((hit) => `${hit.filename}:${hit.line}: ${hit.text}`).join('\n');
+		return plain(
+			`Matches for /${pattern}/:\n${listed}`,
+			`${result.hits.length} matches for ${pattern}`
+		);
+	}
+
+	if (call.name === 'search_chats') {
+		const query = String(args.query ?? '').trim();
+		const hits = await searchChats(env, userId, query);
+		if (!hits.length) {
+			return plain(
+				`Nothing in earlier conversations matches "${query}".`,
+				`No history for ${query}`
+			);
+		}
+		const listed = hits
+			.map(
+				(hit) =>
+					`- ${hit.title} (${new Date(hit.created_at * 1000).toISOString().slice(0, 10)}, ${hit.role}): ${hit.excerpt}`
+			)
+			.join('\n');
+		return plain(
+			`From earlier conversations:\n${listed}`,
+			`Found ${hits.length} earlier messages about "${query}"`
+		);
+	}
+
+	return null;
 }

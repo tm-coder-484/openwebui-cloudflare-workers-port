@@ -145,6 +145,7 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	// user's own data, and only on providers that support tool calling.
 	'tools.memory.enable': true,
 	'tools.files.enable': true,
+	'tools.search.enable': true,
 	'chat.tool_permissions.enable': false,
 
 	'web.search.enable': false,

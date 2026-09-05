@@ -524,12 +524,17 @@ export async function runCompletion(
 		// Memory and file tools do not depend on web search being on for the turn,
 		// so the tool list is assembled from every enabled group rather than from
 		// the search mode alone.
-		const toolConfig = await getConfigMany(env, ['tools.memory.enable', 'tools.files.enable']);
+		const toolConfig = await getConfigMany(env, [
+			'tools.memory.enable',
+			'tools.files.enable',
+			'tools.search.enable'
+		]);
 		const tools = canCallTools
 			? toolsFor({
 					web: plan.tools,
 					memory: toolConfig['tools.memory.enable'] !== false,
-					files: toolConfig['tools.files.enable'] !== false
+					files: toolConfig['tools.files.enable'] !== false,
+					search: toolConfig['tools.search.enable'] !== false
 				})
 			: [];
 		let useTools = tools.length > 0;

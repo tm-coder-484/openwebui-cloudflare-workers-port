@@ -129,6 +129,9 @@ createServer(async (req, res) => {
 			if (kind === 'edit')
 				return one('edit_file', { name: 'agent-note.md', old_text: 'bravo', new_text: 'delta' });
 			if (kind === 'list') return one('list_files', {});
+			if (kind === 'glob') return one('glob_files', { pattern: '*.md' });
+			if (kind === 'grep') return one('grep_files', { pattern: 'bravo' });
+			if (kind === 'history') return one('search_chats', { query: rest || 'durable objects' });
 			return [
 				{
 					index: 0,

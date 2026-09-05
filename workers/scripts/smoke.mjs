@@ -553,6 +553,31 @@ if (models.data?.some((model) => model.id === 'mock-tools')) {
 		assert(content.includes('bravo'), `unexpected file content: ${content.slice(0, 80)}`);
 	});
 
+	await check('the model finds files by pattern and greps their contents', async () => {
+		const globbed = await toolTurn('TOOLTEST:glob');
+		assert(
+			globbed.statuses.some((line) => /files match/.test(line)),
+			`no glob status: ${JSON.stringify(globbed.statuses)}`
+		);
+		const grepped = await toolTurn('TOOLTEST:grep');
+		assert(
+			grepped.statuses.some((line) => /matches for bravo/.test(line)),
+			`no grep status: ${JSON.stringify(grepped.statuses)}`
+		);
+	});
+
+	await check('the model searches earlier conversations', async () => {
+		// The smoke run has already streamed completions into saved chats, so
+		// there is real history to find rather than a seeded row.
+		const turn = await toolTurn('TOOLTEST:history greeting');
+		// Insisting on a hit, not merely that the tool ran: "nothing found" would
+		// pass a weaker assertion whether the search worked or not.
+		assert(
+			turn.statuses.some((line) => /Found \d+ earlier messages about/.test(line)),
+			`search_chats found nothing in a history that contains it: ${JSON.stringify(turn.statuses)}`
+		);
+	});
+
 	await check('the model edits that file, changing only the passage it named', async () => {
 		await toolTurn('TOOLTEST:edit');
 		const files = await api('/api/v1/files/');
