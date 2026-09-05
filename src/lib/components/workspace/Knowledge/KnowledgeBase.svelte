@@ -52,6 +52,7 @@
 	import { computeFileHash } from '$lib/utils/hash';
 
 	import Spinner from '$lib/components/common/Spinner.svelte';
+	import FileItemModal from '$lib/components/common/FileItemModal.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import Files from './KnowledgeBase/Files.svelte';
 	import AddFilesPlaceholder from '$lib/components/AddFilesPlaceholder.svelte';
@@ -110,6 +111,13 @@
 
 	let selectedFileId = null;
 	let selectedFile = null;
+
+	// The preview is the same component the chat and the files browser use, so a
+	// file looks the same wherever it is opened from. The editor below it is what
+	// this screen adds: the extracted text is what gets indexed for retrieval, so
+	// being able to correct it belongs here and nowhere else.
+	let showFilePreview = false;
+	let previewItem: Record<string, unknown> | null = null;
 	let selectedFileContent = '';
 	let loadingFileContent = false;
 
@@ -245,6 +253,26 @@
 		}
 
 		return res;
+	};
+
+	/**
+	 * Opens the file itself, rather than the text pulled out of it.
+	 *
+	 * Clicking a file used to open a bare textarea holding the extracted text,
+	 * which for an image or a PDF is empty — the screen said "Add content here"
+	 * over a file it simply was not showing. This is the shape `FileItemModal`
+	 * reads, the same one the files browser builds.
+	 */
+	const filePreviewHandler = (file) => {
+		if (!file?.id) return;
+		previewItem = {
+			id: file.id,
+			name: file?.meta?.name ?? file.filename,
+			type: 'file',
+			size: file?.meta?.size,
+			meta: file?.meta
+		};
+		showFilePreview = true;
 	};
 
 	const fileSelectHandler = async (file) => {
@@ -1568,6 +1596,10 @@
 												{knowledge}
 												{selectedFileId}
 												onClick={(fileId) => {
+													const file = (fileItems ?? []).find((item) => item.id === fileId);
+													if (file) filePreviewHandler(file);
+												}}
+												onEditText={(fileId) => {
 													selectedFileId = fileId;
 
 													if (fileItems) {
@@ -1743,3 +1775,9 @@
 		)}
 	</div>
 </ConfirmDialog>
+
+<FileItemModal
+	bind:show={showFilePreview}
+	item={previewItem}
+	edit={knowledge?.write_access ?? false}
+/>
