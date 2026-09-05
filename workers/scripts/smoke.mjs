@@ -699,6 +699,22 @@ if (isAdmin) {
 		}
 	});
 
+	await check('the file picker finds files with the pattern the UI sends', async () => {
+		// The composer sends `*name*` while you type and `*` when the box is empty.
+		// Taking that literally made the picker empty whatever the account held.
+		const all = await api('/api/v1/files/');
+		if (all.length) {
+			const globbed = await api('/api/v1/files/search?filename=*');
+			assert(globbed.length > 0, 'a bare * matched nothing despite the account having files');
+
+			const name = all[0].filename.slice(0, 4);
+			const narrowed = await api(
+				`/api/v1/files/search?filename=${encodeURIComponent(`*${name}*`)}`
+			);
+			assert(narrowed.length > 0, `*${name}* matched nothing`);
+		}
+	});
+
 	await check('the tool settings can actually be changed', async () => {
 		// They shipped with a default and no way to set it — no key map, no
 		// environment variable, no screen.
