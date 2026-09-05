@@ -105,23 +105,72 @@ app.post('/config/update', async (c) => {
 	return c.json(await readConfig(c));
 });
 
+/**
+ * The Documents screen reads `RAG_EMBEDDING_ENGINE`, not `embedding_engine`,
+ * and reads `openai_config.key` straight off the response with no guard — so a
+ * missing nested object is a TypeError in `onMount` and the whole tab fails to
+ * render rather than showing empty fields. The three provider blocks are
+ * therefore always present, even though this port embeds through Workers AI.
+ */
+const embeddingConfig = async (c: any) => {
+	const config = await getConfigMany(c.env, [
+		'rag.embedding_engine',
+		'rag.embedding_model',
+		'rag.embedding_batch_size',
+		'rag.embedding_openai.key',
+		'rag.embedding_openai.url',
+		'rag.embedding_ollama.key',
+		'rag.embedding_ollama.url'
+	]);
+	return {
+		RAG_EMBEDDING_ENGINE: config['rag.embedding_engine'] ?? '',
+		RAG_EMBEDDING_MODEL: config['rag.embedding_model'] ?? '',
+		RAG_EMBEDDING_BATCH_SIZE: config['rag.embedding_batch_size'] ?? 1,
+		ENABLE_ASYNC_EMBEDDING: false,
+		RAG_EMBEDDING_CONCURRENT_REQUESTS: 0,
+		openai_config: {
+			key: config['rag.embedding_openai.key'] ?? '',
+			url: config['rag.embedding_openai.url'] ?? ''
+		},
+		ollama_config: {
+			key: config['rag.embedding_ollama.key'] ?? '',
+			url: config['rag.embedding_ollama.url'] ?? ''
+		},
+		// Azure embedding is not implemented here, but the screen reads the object.
+		azure_openai_config: { key: '', url: '', version: '' }
+	};
+};
+
 app.get('/embedding', async (c) => {
 	adminUser(c);
-	const config = await getConfigMany(c.env, ['rag.embedding_engine', 'rag.embedding_model']);
-	return c.json({
-		embedding_engine: config['rag.embedding_engine'],
-		embedding_model: config['rag.embedding_model']
-	});
+	return c.json(await embeddingConfig(c));
 });
 
 app.post('/embedding/update', async (c) => {
 	adminUser(c);
-	const body = (await c.req.json()) as Record<string, unknown>;
+	const body = (await c.req.json()) as Record<string, any>;
 	await setConfigMany(c.env, {
-		'rag.embedding_engine': body.embedding_engine,
-		'rag.embedding_model': body.embedding_model
+		// Both spellings are accepted: the screen sends the upstream names, and
+		// this port's own smoke test and scripts used the short ones.
+		'rag.embedding_engine': body.RAG_EMBEDDING_ENGINE ?? body.embedding_engine,
+		'rag.embedding_model': body.RAG_EMBEDDING_MODEL ?? body.embedding_model,
+		...(body.RAG_EMBEDDING_BATCH_SIZE !== undefined
+			? { 'rag.embedding_batch_size': body.RAG_EMBEDDING_BATCH_SIZE }
+			: {}),
+		...(body.openai_config
+			? {
+					'rag.embedding_openai.key': body.openai_config.key ?? '',
+					'rag.embedding_openai.url': body.openai_config.url ?? ''
+				}
+			: {}),
+		...(body.ollama_config
+			? {
+					'rag.embedding_ollama.key': body.ollama_config.key ?? '',
+					'rag.embedding_ollama.url': body.ollama_config.url ?? ''
+				}
+			: {})
 	});
-	return c.json(body);
+	return c.json(await embeddingConfig(c));
 });
 
 app.get('/reranking', async (c) => {

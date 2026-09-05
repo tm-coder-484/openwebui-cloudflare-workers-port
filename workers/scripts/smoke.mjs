@@ -467,6 +467,87 @@ if (models.data?.length) {
 	console.log('  ! no models configured — completion check skipped');
 }
 
+// --- Admin config shapes --------------------------------------------------
+// The admin screens dereference these paths in `onMount` with no guard, so a
+// missing one is not a blank field — it is a TypeError that stops the whole tab
+// from rendering. This has cost six separate bugs, so the contract is pinned
+// here rather than being rediscovered in a browser each time.
+if (isAdmin) {
+	console.log('\nadmin config shapes');
+
+	const REQUIRED = [
+		// endpoint, paths the frontend reads without checking
+		[
+			'/api/v1/retrieval/embedding',
+			[
+				'RAG_EMBEDDING_ENGINE',
+				'RAG_EMBEDDING_MODEL',
+				'openai_config.key',
+				'openai_config.url',
+				'ollama_config.key',
+				'ollama_config.url',
+				'azure_openai_config.key',
+				'azure_openai_config.version'
+			]
+		],
+		['/api/v1/images/config', ['COMFYUI_WORKFLOW_NODES', 'IMAGES_EDIT_COMFYUI_WORKFLOW_NODES']],
+		['/api/v1/retrieval/config', ['web.WEB_SEARCH_ENGINE', 'web.WEB_SEARCH_MODE']]
+	];
+
+	for (const [endpoint, paths] of REQUIRED) {
+		await check(`${endpoint} has the fields the screen dereferences`, async () => {
+			const body = await api(endpoint);
+			for (const path of paths) {
+				const value = path
+					.split('.')
+					.reduce((node, part) => (node == null ? undefined : node[part]), body);
+				assert(
+					value !== undefined,
+					`${path} is missing — the screen reads it unguarded and will throw`
+				);
+			}
+		});
+	}
+
+	await check('the ComfyUI node lists are arrays, not just present', async () => {
+		// `config.COMFYUI_WORKFLOW_NODES.find(...)` runs whatever the engine is.
+		const images = await api('/api/v1/images/config');
+		assert(Array.isArray(images.COMFYUI_WORKFLOW_NODES), 'COMFYUI_WORKFLOW_NODES is not an array');
+		assert(
+			Array.isArray(images.IMAGES_EDIT_COMFYUI_WORKFLOW_NODES),
+			'IMAGES_EDIT_COMFYUI_WORKFLOW_NODES is not an array'
+		);
+	});
+
+	await check("the embedding settings round-trip under the screen's field names", async () => {
+		const saved = await api('/api/v1/retrieval/embedding/update', {
+			method: 'POST',
+			body: JSON.stringify({
+				RAG_EMBEDDING_ENGINE: 'openai',
+				RAG_EMBEDDING_MODEL: 'text-embedding-3-small',
+				openai_config: { key: 'smoke-embed-key', url: 'https://api.openai.com/v1' }
+			})
+		});
+		assert(saved.RAG_EMBEDDING_ENGINE === 'openai', 'the engine was not saved');
+		assert(saved.openai_config.key === 'smoke-embed-key', 'the provider key was dropped');
+
+		const reloaded = await api('/api/v1/retrieval/embedding');
+		assert(
+			reloaded.openai_config.url === 'https://api.openai.com/v1',
+			'the provider URL did not persist'
+		);
+
+		// Put it back so the rest of the run embeds through Workers AI.
+		await api('/api/v1/retrieval/embedding/update', {
+			method: 'POST',
+			body: JSON.stringify({
+				RAG_EMBEDDING_ENGINE: 'workers-ai',
+				RAG_EMBEDDING_MODEL: '@cf/baai/bge-base-en-v1.5'
+			})
+		});
+	});
+}
+
 // --- Long documents -------------------------------------------------------
 // Retrieval hands the model `top_k` chunks — three thousand characters by
 // default — however long the document is. The Documents screen has a switch for
