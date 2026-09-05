@@ -48,8 +48,27 @@ const reply = (messages) => {
 	return `Hello from the mock model! You said: ${text || '(nothing)'}`;
 };
 
+// The recent chat requests this mock was sent. A test that needs to know what
+// the Worker put on the wire — rather than what came back — reads them from
+// here. A list rather than the last one alone: a turn is followed by its
+// background tasks, so "the last request" is a title prompt, not the turn.
+const recentRequests = [];
+
 createServer(async (req, res) => {
 	const url = new URL(req.url, `http://${req.headers.host}`);
+
+	if (url.pathname.endsWith('/__recent-requests')) {
+		res.writeHead(200, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify(recentRequests));
+		return;
+	}
+
+	if (url.pathname.endsWith('/__reset-requests')) {
+		recentRequests.length = 0;
+		res.writeHead(200, { 'Content-Type': 'application/json' });
+		res.end('{"ok":true}');
+		return;
+	}
 
 	if (url.pathname.endsWith('/models')) {
 		res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -78,6 +97,8 @@ createServer(async (req, res) => {
 			}
 		}
 		const body = await readBody(req);
+		recentRequests.push(body);
+		if (recentRequests.length > 20) recentRequests.shift();
 
 		// Answers a query-generation prompt the way a real task model would, so the
 		// web-search path can be exercised end to end.
