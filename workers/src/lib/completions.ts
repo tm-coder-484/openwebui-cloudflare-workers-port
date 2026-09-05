@@ -502,26 +502,35 @@ function toolCallBlock(call: ToolCall, result: string): string {
 /**
  * Accumulates `reasoning_content` into a collapsible block.
  *
- * The opening tag goes out with the first token and the closing tag when the
- * answer starts (or the stream ends), so the block streams live rather than
- * appearing all at once. It cannot carry a duration: the tag is already on the
- * wire by the time the model stops thinking, and the port never rewrites text
- * it has emitted.
+ * The block is opened `done="false"`, which is what makes the frontend show it
+ * as "Thinking..." with a spinner while it fills; `seal` rewrites that to
+ * `done="true"` with the elapsed seconds once the model stops, so it settles
+ * into "Thought for 12 seconds". The rewrite is possible because a message
+ * carrying an open block is sent whole rather than as a delta — see
+ * `emitMessage` below for why it has to be.
  */
+const REASONING_OPEN = '<details type="reasoning" done="false">';
+
 function openReasoningBlock() {
 	let open = false;
+	let startedAt = 0;
 
 	return {
+		/** Whether a block is currently open, and therefore unterminated. */
+		get open() {
+			return open;
+		},
 		/** The text to append for this reasoning delta. */
 		push(text: string): string {
 			if (open) return text;
 			open = true;
+			startedAt = Date.now();
 			// The frontend tokenises `<details>` with a block-anchored pattern, so a
 			// tag glued onto the end of the previous line is parsed as inline HTML
 			// and renders as nothing. That is invisible for the first block, which
 			// starts the message, and breaks every later one — a model that thinks
 			// again after answering.
-			return `\n\n<details type="reasoning">\n<summary>Thinking</summary>\n${text}`;
+			return `\n\n${REASONING_OPEN}\n<summary>Thinking</summary>\n${text}`;
 		},
 		/** The text that closes the block, or '' when none is open. */
 		close(): string {
@@ -530,6 +539,22 @@ function openReasoningBlock() {
 			// The blank line after </details> does the same job for whatever the
 			// model says next.
 			return '\n</details>\n\n';
+		},
+		/**
+		 * Marks the block just closed as finished, with how long it took.
+		 *
+		 * The last unsealed tag is the one that closed: earlier blocks in the same
+		 * message were sealed when they closed, so only one can ever match.
+		 */
+		seal(message: string): string {
+			const at = message.lastIndexOf(REASONING_OPEN);
+			if (at === -1) return message;
+			const seconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+			return (
+				message.slice(0, at) +
+				`<details type="reasoning" done="true" duration="${seconds}">` +
+				message.slice(at + REASONING_OPEN.length)
+			);
 		}
 	};
 }
@@ -643,17 +668,58 @@ export async function runCompletion(
 			// in the message text, so the thinking is wrapped into one as it
 			// arrives, then closed when the answer proper starts.
 			const reasoning = openReasoningBlock();
+
+			/**
+			 * Sends the whole message rather than the piece that just arrived.
+			 *
+			 * The frontend's `<details>` tokeniser needs the closing tag before it
+			 * will produce a block at all, so an open one renders as nothing — the
+			 * thinking appeared only once the model had finished thinking, which is
+			 * the least useful moment for it. Sending the message with a
+			 * provisional `</details>` on the end makes the block appear with the
+			 * first token and fill in live; the real closing tag replaces it when
+			 * the model stops. This is the `content` field the frontend assigns
+			 * straight to the message, so it also lets the opening tag be rewritten
+			 * afterwards with how long the thinking took.
+			 */
+			const emitMessage = () =>
+				emitCompletion({
+					id: job.messageId,
+					content: reasoning.open ? `${content}\n</details>` : content,
+					done: false
+				});
+
 			const pushDelta = async (delta: string) => {
 				// The reasoning block asks for a blank line before it; at the very
 				// start of a message there is nothing to separate it from.
 				if (!content) delta = delta.replace(/^\n+/, '');
 				if (!delta) return;
 				content += delta;
+				// A delta is cheaper, and correct for everything except an open
+				// reasoning block, where the frontend has nothing to render it into.
+				if (reasoning.open) {
+					await emitMessage();
+					return;
+				}
 				await emitCompletion({
 					id: job.messageId,
 					choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
 					done: false
 				});
+			};
+
+			/**
+			 * Ends the open reasoning block, if there is one.
+			 *
+			 * Both the closing tag and the duration change text already on the
+			 * wire, so the message goes out whole once more; after that the stream
+			 * is back to deltas, appended to exactly this text.
+			 */
+			const closeReasoning = async () => {
+				const trailing = reasoning.close();
+				if (!trailing) return;
+				content = reasoning.seal(content + trailing);
+				await emitMessage();
 			};
 
 			// Each round is one model turn. A turn that ends in tool calls is run,
@@ -677,7 +743,10 @@ export async function runCompletion(
 						if (chunk.usage) usage = chunk.usage;
 						if (chunk.toolCalls) pending.push(chunk.toolCalls);
 						if (chunk.reasoning) await pushDelta(reasoning.push(chunk.reasoning));
-						if (chunk.content) await pushDelta(reasoning.close() + chunk.content);
+						if (chunk.content) {
+							await closeReasoning();
+							await pushDelta(chunk.content);
+						}
 					}
 				} catch (error) {
 					// Not every model accepts `tools`. Rather than failing the message,
@@ -772,8 +841,7 @@ export async function runCompletion(
 			}
 
 			// A model that only ever produced reasoning still needs its block shut.
-			const trailing = reasoning.close();
-			if (trailing) await pushDelta(trailing);
+			await closeReasoning();
 		} else {
 			const result = await callUpstream(env, request);
 			content = result.content;
