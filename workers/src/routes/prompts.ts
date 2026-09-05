@@ -10,6 +10,7 @@ import {
 	deleteGrants,
 	visibleResourceIdsClause
 } from '../lib/access';
+import { listPage, readListingQuery } from '../lib/listing';
 import { hasPermission } from '../lib/permissions';
 import { getUserById, publicUser } from '../lib/users';
 import { unifiedDiff } from '../lib/diff';
@@ -130,9 +131,21 @@ app.get('/', async (c) => {
 	return respond(c, rows);
 });
 
+/**
+ * The workspace listing: `{items, total, page}`, filtered and sorted.
+ *
+ * `/` above stays a bare array — the chat composer's slash-command menu reads
+ * it that way, and the two callers want different things from the same rows.
+ */
 app.get('/list', async (c) => {
-	const { rows } = await listVisible(c);
-	return respond(c, rows);
+	const { user, rows } = await listVisible(c);
+	const grants = await listGrants(
+		c.env,
+		'prompt',
+		rows.map((row) => row.id)
+	);
+	const serialized = rows.map((row) => serialize(row, grants.get(row.id) ?? []));
+	return c.json(listPage(serialized, readListingQuery(c), user.id));
 });
 
 app.get('/tags', async (c) => {

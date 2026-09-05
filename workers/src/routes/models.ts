@@ -10,6 +10,7 @@ import {
 	deleteGrants,
 	visibleResourceIdsClause
 } from '../lib/access';
+import { listPage, readListingQuery } from '../lib/listing';
 import { hasPermission } from '../lib/permissions';
 import {
 	getBaseModels,
@@ -46,6 +47,10 @@ app.get('/', async (c) => {
 	return c.json(await withGrants(c, results ?? []));
 });
 
+/**
+ * The workspace listing: `{items, total, page}`, filtered and sorted. `/` above
+ * stays a bare array, which is what the model picker reads.
+ */
 app.get('/list', async (c) => {
 	const user = verifiedUser(c);
 	const rows = await listModelRows(c.env);
@@ -53,7 +58,7 @@ app.get('/list', async (c) => {
 	for (const row of rows) {
 		if (await hasAccess(c.env, user, 'model', row.id, row.user_id)) visible.push(row);
 	}
-	return c.json(await withGrants(c, visible));
+	return c.json(listPage(await withGrants(c, visible), readListingQuery(c), user.id));
 });
 
 app.get('/base', async (c) => {

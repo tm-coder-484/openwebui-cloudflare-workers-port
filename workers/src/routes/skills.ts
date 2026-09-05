@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import type { AppContext } from '../types';
 import { verifiedUser } from '../lib/auth';
+import { listPage, readListingQuery } from '../lib/listing';
 import { hasAccess, listGrants, replaceGrants, deleteGrants } from '../lib/access';
 import { hasPermission } from '../lib/permissions';
 import { bad, forbidden, notFound, now, parseJSON, toBool, toJSON, uuid } from '../lib/util';
@@ -56,7 +57,13 @@ async function visibleSkills(c: any) {
 }
 
 app.get('/', async (c) => c.json(await visibleSkills(c)));
-app.get('/list', async (c) => c.json(await visibleSkills(c)));
+/**
+ * The workspace listing: `{items, total, page}`, filtered and sorted. `/export`
+ * below keeps the bare array, since a download wants every row at once.
+ */
+app.get('/list', async (c) =>
+	c.json(listPage(await visibleSkills(c), readListingQuery(c), verifiedUser(c).id))
+);
 app.get('/export', async (c) => c.json(await visibleSkills(c)));
 
 app.post('/create', async (c) => {
