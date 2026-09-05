@@ -579,6 +579,7 @@ filesystem and no command execution anywhere in this port.
 | Memory | `remember`, `recall`, `forget`                        | `tools.memory.enable` |
 | Files  | `list_files`, `read_file`, `create_file`, `edit_file` | `tools.files.enable`  |
 | Search | `glob_files`, `grep_files`, `search_chats`            | `tools.search.enable` |
+| Plan   | `todo_write`, `todo_read`                             | `tools.todo.enable`   |
 
 A turn allows **three rounds of tool calls** before the model has to answer —
 enough for search, read a result, search again. Raise it with `tools.max_rounds`
@@ -598,14 +599,16 @@ without a redeploy:
 | `ENABLE_MEMORY_TOOLS` | `tools.memory.enable` | true / false    |
 | `ENABLE_FILE_TOOLS`   | `tools.files.enable`  | true / false    |
 | `ENABLE_SEARCH_TOOLS` | `tools.search.enable` | true / false    |
+| `ENABLE_TODO_TOOLS`   | `tools.todo.enable`   | true / false    |
 
-````bash
+```bash
 curl -X POST "$WEBUI/api/v1/configs/tools" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"TOOLS_MAX_ROUNDS": 8, "ENABLE_FILE_TOOLS": false}'
-``` They do **not**
-require web search to be enabled for the turn — the search mode governs the
-search tools only.
+```
+
+None of these groups require web search to be enabled for the turn — the search
+mode governs the search tools only.
 
 **Memory** makes the existing per-user memories something the model reaches for
 rather than something injected: it saves a fact when the user tells it one, and
@@ -638,6 +641,24 @@ searches the user's own past messages, so "what did we decide about X" resolves
 against real history rather than being answered from nothing. Matching rows are
 prefiltered in SQL and then ranked with the same scorer retrieval uses, so a
 long history never loads into memory.
+
+**Plan** is what makes a long chain legible. `todo_write` records the steps for
+a job that takes several, marking one `in_progress` at a time, and the status
+strip shows progress and the step in flight — `2/5 — Edit the notes` — so a turn
+that runs for a while is something you can watch rather than a blank pause.
+`todo_read` brings it back, and because the plan lives on the chat row it
+survives between messages: a follow-up tomorrow picks up where it left off.
+
+The list is replaced wholesale on every write rather than patched item by item.
+That is deliberate — a model that has to restate the whole plan cannot let it
+drift — and it is what the tool description promises, so a partial write loses
+whatever was left out.
+
+Two things follow from where it is stored. A plan needs a **saved chat**: a
+temporary chat has no row to keep it on, and the tool says so rather than
+failing the turn. And `chat.meta` is read-modify-written, shared with tags and
+pinning, so two turns running at once in the _same_ chat could overwrite each
+other's list — sequential tool calls within one turn are safe.
 
 A `grep_files` pattern is a user-supplied regular expression, which is worth one
 guard: patterns are capped at 200 characters, and an invalid one is reported
@@ -696,7 +717,7 @@ start script wires it up for you:
 
 ```bash
 ./start-workers.sh --mock --sso        # Windows: start-workers.bat --mock --sso
-````
+```
 
 The login page then shows **Continue with Mock IdP**, which signs you in as
 `sso.user@example.com` without asking for anything. To drive it by hand instead,

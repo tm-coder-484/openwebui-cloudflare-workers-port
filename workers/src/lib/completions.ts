@@ -546,6 +546,7 @@ export async function runCompletion(
 			'tools.memory.enable',
 			'tools.files.enable',
 			'tools.search.enable',
+			'tools.todo.enable',
 			'tools.max_rounds'
 		]);
 		const maxToolRounds = toolRounds(toolConfig['tools.max_rounds']);
@@ -554,7 +555,9 @@ export async function runCompletion(
 					web: plan.tools,
 					memory: toolConfig['tools.memory.enable'] !== false,
 					files: toolConfig['tools.files.enable'] !== false,
-					search: toolConfig['tools.search.enable'] !== false
+					search: toolConfig['tools.search.enable'] !== false,
+					// A plan is kept against the chat row, so it needs a saved chat.
+					todo: toolConfig['tools.todo.enable'] !== false && job.saveToChat
 				})
 			: [];
 		let useTools = tools.length > 0;
@@ -686,7 +689,10 @@ export async function runCompletion(
 						}
 					});
 
-					const outcome = await runToolCall(env, call, { userId: job.userId }).catch((error) => ({
+					const outcome = await runToolCall(env, call, {
+						userId: job.userId,
+						chatId: job.chatId
+					}).catch((error) => ({
 						content: `The tool failed: ${(error as Error).message}`,
 						sources: [] as Record<string, unknown>[],
 						status: `${call.name} failed`

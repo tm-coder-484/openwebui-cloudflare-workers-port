@@ -474,7 +474,7 @@ if (models.data?.length) {
 if (models.data?.some((model) => model.id === 'mock-tools')) {
 	console.log('\nmemory & file tools');
 
-	const toolTurn = async (prompt) => {
+	const toolTurn = async (prompt, inChatId) => {
 		const socket = await connectSocket(token);
 		try {
 			socket.resetEvents();
@@ -486,6 +486,7 @@ if (models.data?.some((model) => model.id === 'mock-tools')) {
 					stream: true,
 					model: 'mock-tools',
 					messages: [{ role: 'user', content: prompt }],
+					...(inChatId ? { chat_id: inChatId } : {}),
 					id: messageId,
 					parent_id: null,
 					session_id: socket.sid,
@@ -564,6 +565,38 @@ if (models.data?.some((model) => model.id === 'mock-tools')) {
 			grepped.statuses.some((line) => /matches for bravo/.test(line)),
 			`no grep status: ${JSON.stringify(grepped.statuses)}`
 		);
+	});
+
+	await check('the model records a plan, and it survives into the next turn', async () => {
+		// The plan is kept against the chat row, so a second turn in the same chat
+		// must find it — that persistence is the whole point of the tool.
+		const chat = await api('/api/v1/chats/new', {
+			method: 'POST',
+			body: JSON.stringify({
+				chat: {
+					title: 'Plan chat',
+					models: ['mock-tools'],
+					history: { currentId: null, messages: {} }
+				}
+			})
+		});
+
+		const written = await toolTurn('TOOLTEST:plan', chat.id);
+		assert(
+			written.statuses.some((line) => line.includes('Edit them')),
+			`the plan status did not name the step in flight: ${JSON.stringify(written.statuses)}`
+		);
+
+		const stored = await api(`/api/v1/chats/${chat.id}`);
+		assert(stored.meta?.todos?.length === 3, 'the plan did not reach the chat row');
+
+		const read = await toolTurn('TOOLTEST:planread', chat.id);
+		assert(
+			read.statuses.some((line) => line.startsWith('1/3')),
+			`a later turn could not read the plan back: ${JSON.stringify(read.statuses)}`
+		);
+
+		await api(`/api/v1/chats/${chat.id}`, { method: 'DELETE' }).catch(() => {});
 	});
 
 	await check('the model searches earlier conversations', async () => {

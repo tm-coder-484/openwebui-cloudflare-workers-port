@@ -17,6 +17,7 @@ import { fetchPageText, resultText, webSearch } from './websearch';
 import { addMemory, deleteMemory, queryMemories } from './memories';
 import { createUserFile, editUserFile, findUserFile, listUserFiles } from './userfiles';
 import { globFiles, grepFiles, searchChats } from './workspace';
+import { normalizeTodos, readTodos, renderTodos, todoSummary, writeTodos } from './todos';
 
 export interface ToolCall {
 	id: string;
@@ -34,6 +35,8 @@ export interface ToolCall {
  */
 export interface ToolContext {
 	userId: string;
+	/** The conversation this turn belongs to; the plan is stored against it. */
+	chatId?: string;
 }
 
 export interface ToolOutcome {
@@ -149,6 +152,9 @@ export async function runToolCall(
 
 	const workspace = await runWorkspaceTool(env, call, args, context);
 	if (workspace) return workspace;
+
+	const todo = await runTodoTool(env, call, args, context);
+	if (todo) return todo;
 
 	if (call.name === 'web_search') {
 		const query = String(args.query ?? '').trim();
@@ -394,12 +400,14 @@ export function toolsFor(enabled: {
 	memory?: boolean;
 	files?: boolean;
 	search?: boolean;
+	todo?: boolean;
 }): unknown[] {
 	return [
 		...(enabled.web ? WEB_TOOLS : []),
 		...(enabled.memory ? MEMORY_TOOLS : []),
 		...(enabled.files ? FILE_TOOLS : []),
-		...(enabled.search ? SEARCH_TOOLS : [])
+		...(enabled.search ? SEARCH_TOOLS : []),
+		...(enabled.todo ? TODO_TOOLS : [])
 	];
 }
 
@@ -667,4 +675,84 @@ async function runWorkspaceTool(
 	}
 
 	return null;
+}
+
+export const TODO_TOOLS = [
+	{
+		type: 'function',
+		function: {
+			name: 'todo_write',
+			description:
+				'Record the plan for a job that takes several steps, and keep it current: ' +
+				'mark a step in_progress before starting it and completed as soon as it is ' +
+				'done. Send the whole list every time — it replaces the previous one, so ' +
+				'anything you leave out is dropped. Exactly one step should be in_progress. ' +
+				'Skip this for a request you can answer in one go.',
+			parameters: {
+				type: 'object',
+				properties: {
+					todos: {
+						type: 'array',
+						description: 'The complete plan, in order.',
+						items: {
+							type: 'object',
+							properties: {
+								content: { type: 'string', description: 'The step, as an imperative.' },
+								status: {
+									type: 'string',
+									enum: ['pending', 'in_progress', 'completed'],
+									description: 'Where the step has got to.'
+								}
+							},
+							required: ['content', 'status']
+						}
+					}
+				},
+				required: ['todos']
+			}
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'todo_read',
+			description:
+				'Read the plan for this conversation. It survives between messages, so call ' +
+				'this when picking up work from an earlier turn.',
+			parameters: { type: 'object', properties: {}, required: [] }
+		}
+	}
+] as const;
+
+/** The plan tools; returns null for anything it does not handle. */
+async function runTodoTool(
+	env: Env,
+	call: ToolCall,
+	args: Record<string, any>,
+	context: ToolContext
+): Promise<ToolOutcome | null> {
+	if (call.name !== 'todo_write' && call.name !== 'todo_read') return null;
+
+	const chatId = context.chatId ?? '';
+	// A temporary chat is never written to the database, so there is nowhere to
+	// keep a plan. Saying so beats failing the turn over it.
+	const unavailable = plain(
+		'A plan cannot be kept for this conversation — it is not a saved chat.',
+		'No plan available here'
+	);
+
+	if (call.name === 'todo_read') {
+		const todos = await readTodos(env, context.userId, chatId);
+		if (todos === null) return unavailable;
+		if (!todos.length) return plain('No plan has been recorded yet.', 'No plan yet');
+		return plain(`The plan for this conversation:\n${renderTodos(todos)}`, todoSummary(todos));
+	}
+
+	const todos = normalizeTodos(args.todos);
+	const written = await writeTodos(env, context.userId, chatId, todos);
+	if (!written) return unavailable;
+	return plain(
+		todos.length ? `Plan recorded:\n${renderTodos(todos)}` : 'Plan cleared.',
+		todoSummary(todos)
+	);
 }

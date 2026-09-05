@@ -43,6 +43,7 @@ export interface Env {
 	ENABLE_MEMORY_TOOLS?: string;
 	ENABLE_FILE_TOOLS?: string;
 	ENABLE_SEARCH_TOOLS?: string;
+	ENABLE_TODO_TOOLS?: string;
 	WEB_SEARCH_API_KEY?: string;
 	WEB_SEARCH_URL?: string;
 	RAG_EMBEDDING_MODEL?: string;
