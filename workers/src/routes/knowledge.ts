@@ -13,6 +13,7 @@ import {
 import { hasPermission } from '../lib/permissions';
 import { indexChunks, removeChunks, search } from '../lib/retrieval';
 import { bad, forbidden, notFound, now, parseJSON, toJSON, uuid } from '../lib/util';
+import { PAGE_SIZE, listPage, readListingQuery } from '../lib/listing';
 
 const app = new Hono<AppContext>({ strict: false });
 
@@ -138,7 +139,6 @@ app.post('/create', async (c) => {
  * never opened. The workspace screen survived only because it happens to write
  * `res.items ?? []`, and its result count was silently always undefined.
  */
-const PAGE_SIZE = 30;
 
 const paginate = <T>(items: T[], page: number) => ({
 	items: items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
@@ -147,16 +147,18 @@ const paginate = <T>(items: T[], page: number) => ({
 });
 
 app.get('/search', async (c) => {
+	const user = verifiedUser(c);
 	const rows = await visible(c);
-	const query = (c.req.query('query') ?? '').toLowerCase();
-	const page = Math.max(1, Number(c.req.query('page') ?? 1) || 1);
-	const matched = rows.filter(
-		(row) => row.name.toLowerCase().includes(query) || row.description.toLowerCase().includes(query)
-	);
-	const window = paginate(matched, page);
+	const options = readListingQuery(c);
+	// Serialised first: the sort and the "created / shared with me" filter read
+	// the same fields the screen displays, rather than a second set of names.
+	const serialized = await Promise.all(rows.map((row) => serialize(c, row, [], false)));
+	const window = listPage(serialized, options, user.id);
 	return c.json({
 		...window,
-		items: await Promise.all(window.items.map((row) => serialize(c, row)))
+		items: await Promise.all(
+			window.items.map((row) => serialize(c, rows.find((r) => r.id === row.id)!))
+		)
 	});
 });
 
@@ -200,9 +202,27 @@ app.get('/:id', async (c) => {
 	return c.json(await serialize(c, row, grants));
 });
 
+/**
+ * The detail screen reads `res.items`, `res.total`, `res.directories` and
+ * `res.breadcrumbs`, assigning each straight through. A bare array left
+ * `fileItems` undefined and the template then read `.length` off it, so opening
+ * a knowledge base rendered nothing and threw.
+ */
 app.get('/:id/files', async (c) => {
 	const { row } = await load(c, c.req.param('id'));
-	return c.json(await filesFor(c, row.id));
+	const page = Math.max(1, Number(c.req.query('page') ?? 1) || 1);
+	const query = (c.req.query('query') ?? '').toLowerCase();
+
+	const all = await filesFor(c, row.id);
+	const matched = query
+		? all.filter((file) => String(file.filename).toLowerCase().includes(query))
+		: all;
+
+	return c.json({
+		...paginate(matched, page),
+		directories: await directoriesFor(c, row.id),
+		breadcrumbs: []
+	});
 });
 
 app.post('/:id/update', async (c) => {

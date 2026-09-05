@@ -27,7 +27,8 @@ import {
 	runToolCall,
 	searchPlan,
 	toolCallAccumulator,
-	toolsFor
+	toolsFor,
+	type ToolCall
 } from './tools';
 import { HttpError, now, toJSON } from './util';
 
@@ -471,6 +472,31 @@ export interface CompletionJob {
 	body: Record<string, any>;
 }
 
+/**
+ * Renders a tool call as a `<details type="tool_calls">` block.
+ *
+ * Status events all land in one strip above the message, so a turn that calls
+ * three tools between paragraphs showed them stacked at the top, detached from
+ * the text they belong to. The frontend already renders this detail type inline
+ * — the same mechanism reasoning uses — so the call appears where it happened.
+ *
+ * Nothing variable goes in an attribute. The tokeniser reads them with
+ * `/(\w+)="(.*?)"/`, which any quote in the value truncates, and matches the
+ * opening tag with `[^>]*`, which any `>` ends early — so JSON arguments in an
+ * attribute would corrupt the tag rather than merely look wrong. The tool name
+ * and id are reduced to characters that cannot do either, and everything else
+ * goes in the block body, which is free text and is what the renderer reads for
+ * the result.
+ */
+function toolCallBlock(call: ToolCall, result: string): string {
+	const safe = (value: string) => value.replace(/[^\w.-]/g, '_').slice(0, 64);
+	const body = [`Arguments: ${call.arguments || '{}'}`, '', result].join('\n');
+	return (
+		`\n\n<details type="tool_calls" done="true" id="${safe(call.id)}" name="${safe(call.name)}">\n` +
+		`<summary>${safe(call.name)}</summary>\n${body}\n</details>\n\n`
+	);
+}
+
 /** Executes one completion, streaming `chat:completion` events as it goes. */
 /**
  * Accumulates `reasoning_content` into a collapsible block.
@@ -489,13 +515,20 @@ function openReasoningBlock() {
 		push(text: string): string {
 			if (open) return text;
 			open = true;
-			return `<details type="reasoning">\n<summary>Thinking</summary>\n${text}`;
+			// The frontend tokenises `<details>` with a block-anchored pattern, so a
+			// tag glued onto the end of the previous line is parsed as inline HTML
+			// and renders as nothing. That is invisible for the first block, which
+			// starts the message, and breaks every later one — a model that thinks
+			// again after answering.
+			return `\n\n<details type="reasoning">\n<summary>Thinking</summary>\n${text}`;
 		},
 		/** The text that closes the block, or '' when none is open. */
 		close(): string {
 			if (!open) return '';
 			open = false;
-			return '\n</details>\n';
+			// The blank line after </details> does the same job for whatever the
+			// model says next.
+			return '\n</details>\n\n';
 		}
 	};
 }
@@ -610,6 +643,10 @@ export async function runCompletion(
 			// arrives, then closed when the answer proper starts.
 			const reasoning = openReasoningBlock();
 			const pushDelta = async (delta: string) => {
+				// The reasoning block asks for a blank line before it; at the very
+				// start of a message there is nothing to separate it from.
+				if (!content) delta = delta.replace(/^\n+/, '');
+				if (!delta) return;
 				content += delta;
 				await emitCompletion({
 					id: job.messageId,
@@ -727,6 +764,9 @@ export async function runCompletion(
 							data: { action: 'web_search', description: outcome.status, done: true }
 						}
 					});
+
+					// And in the message itself, where the call actually happened.
+					await pushDelta(toolCallBlock(call, outcome.status));
 				}
 			}
 
