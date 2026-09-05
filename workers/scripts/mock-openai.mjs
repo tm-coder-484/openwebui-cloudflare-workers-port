@@ -141,6 +141,11 @@ createServer(async (req, res) => {
 					]
 				});
 			if (kind === 'planread') return one('todo_read', {});
+			if (kind === 'kblist') return one('list_knowledge', {});
+			if (kind === 'kbsearch') return one('search_knowledge', { query: rest || 'edge javascript' });
+			if (kind === 'kbfiles') return one('list_files', { knowledge: rest || 'Tool KB' });
+			if (kind === 'kbgrep')
+				return one('grep_files', { pattern: 'Cloudflare', knowledge: rest || 'Tool KB' });
 			return [
 				{
 					index: 0,

@@ -155,7 +155,8 @@ const TOOL_KEYS: Record<string, string> = {
 	ENABLE_MEMORY_TOOLS: 'tools.memory.enable',
 	ENABLE_FILE_TOOLS: 'tools.files.enable',
 	ENABLE_SEARCH_TOOLS: 'tools.search.enable',
-	ENABLE_TODO_TOOLS: 'tools.todo.enable'
+	ENABLE_TODO_TOOLS: 'tools.todo.enable',
+	ENABLE_KNOWLEDGE_TOOLS: 'tools.knowledge.enable'
 };
 
 app.get('/tools', async (c) => {

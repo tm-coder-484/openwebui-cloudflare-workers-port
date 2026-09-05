@@ -16,8 +16,18 @@ import type { Env } from '../types';
 import { fetchPageText, resultText, webSearch } from './websearch';
 import { addMemory, deleteMemory, queryMemories } from './memories';
 import { createUserFile, editUserFile, findUserFile, listUserFiles } from './userfiles';
-import { globFiles, grepFiles, searchChats } from './workspace';
+import { globFiles, globToRegExp, grepFiles, grepIn, searchChats } from './workspace';
 import { normalizeTodos, readTodos, renderTodos, todoSummary, writeTodos } from './todos';
+import {
+	attachFileToKnowledge,
+	canWrite,
+	filesInKnowledge,
+	findKnowledge,
+	visibleKnowledge,
+	type KnowledgeBase,
+	type KnowledgeFile
+} from './knowledgetools';
+import { search } from './retrieval';
 
 export interface ToolCall {
 	id: string;
@@ -155,6 +165,9 @@ export async function runToolCall(
 
 	const todo = await runTodoTool(env, call, args, context);
 	if (todo) return todo;
+
+	const knowledge = await runKnowledgeTool(env, call, args, context);
+	if (knowledge) return knowledge;
 
 	if (call.name === 'web_search') {
 		const query = String(args.query ?? '').trim();
@@ -328,8 +341,16 @@ export const FILE_TOOLS = [
 		type: 'function',
 		function: {
 			name: 'list_files',
-			description: "List the files in the user's workspace, with their names and sizes.",
-			parameters: { type: 'object', properties: {}, required: [] }
+			description:
+				"List the files in the user's workspace, with their names and sizes. Pass " +
+				'`knowledge` to list the files inside a knowledge base instead.',
+			parameters: {
+				type: 'object',
+				properties: {
+					knowledge: { type: 'string', description: 'A knowledge base name, to list its files.' }
+				},
+				required: []
+			}
 		}
 	},
 	{
@@ -344,6 +365,7 @@ export const FILE_TOOLS = [
 				type: 'object',
 				properties: {
 					name: { type: 'string', description: 'The file name, or its id.' },
+					knowledge: { type: 'string', description: 'Look in this knowledge base.' },
 					offset: { type: 'integer', description: 'First line to return, 1-based.' },
 					limit: { type: 'integer', description: 'How many lines to return.' }
 				},
@@ -363,7 +385,11 @@ export const FILE_TOOLS = [
 				type: 'object',
 				properties: {
 					name: { type: 'string', description: 'File name including an extension, e.g. notes.md' },
-					content: { type: 'string', description: 'The full text of the file.' }
+					content: { type: 'string', description: 'The full text of the file.' },
+					knowledge: {
+						type: 'string',
+						description: 'Add the new file to this knowledge base, if you have write access.'
+					}
 				},
 				required: ['name', 'content']
 			}
@@ -401,17 +427,48 @@ export function toolsFor(enabled: {
 	files?: boolean;
 	search?: boolean;
 	todo?: boolean;
+	knowledge?: boolean;
 }): unknown[] {
 	return [
 		...(enabled.web ? WEB_TOOLS : []),
 		...(enabled.memory ? MEMORY_TOOLS : []),
 		...(enabled.files ? FILE_TOOLS : []),
 		...(enabled.search ? SEARCH_TOOLS : []),
-		...(enabled.todo ? TODO_TOOLS : [])
+		...(enabled.todo ? TODO_TOOLS : []),
+		...(enabled.knowledge ? KNOWLEDGE_TOOLS : [])
 	];
 }
 
 const plain = (content: string, status: string): ToolOutcome => ({ content, sources: [], status });
+
+/**
+ * Resolves the optional `knowledge` argument to a set of files.
+ *
+ * Returns `null` when no base was named, meaning "the user's own files"; an
+ * error outcome when the named base is not visible to them. Every file tool
+ * goes through this rather than reaching for `knowledge_file` itself, so the
+ * access check exists once.
+ */
+async function scopeToKnowledge(
+	env: Env,
+	context: ToolContext,
+	named: unknown
+): Promise<{ files: KnowledgeFile[]; base: KnowledgeBase } | ToolOutcome | null> {
+	const name = String(named ?? '').trim();
+	if (!name) return null;
+
+	const base = await findKnowledge(env, context.userId, name);
+	if (!base) {
+		return plain(
+			`There is no knowledge base called ${name} that you can see.`,
+			`No knowledge base ${name}`
+		);
+	}
+	return { files: await filesInKnowledge(env, [base]), base };
+}
+
+const isOutcome = (value: unknown): value is ToolOutcome =>
+	!!value && typeof value === 'object' && 'status' in (value as any);
 
 /** Memory and file tools; returns null for anything it does not handle. */
 async function runUserDataTool(
@@ -451,17 +508,36 @@ async function runUserDataTool(
 		}
 
 		case 'list_files': {
-			const files = await listUserFiles(env, userId);
-			if (!files.length) return plain('The workspace has no files.', 'No files');
+			const scope = await scopeToKnowledge(env, context, args.knowledge);
+			if (isOutcome(scope)) return scope;
+
+			const files = scope ? scope.files : await listUserFiles(env, userId);
+			const where = scope ? scope.base.name : 'the workspace';
+			if (!files.length) return plain(`${where} has no files.`, `No files in ${where}`);
 			const listed = files
 				.map((file) => `- ${file.filename} (${file.content.length} characters)`)
 				.join('\n');
-			return plain(`Files in the workspace:\n${listed}`, `Listed ${files.length} files`);
+			return plain(`Files in ${where}:\n${listed}`, `Listed ${files.length} files in ${where}`);
 		}
 
 		case 'read_file': {
 			const name = String(args.name ?? '').trim();
-			const file = await findUserFile(env, userId, name);
+			const scope = await scopeToKnowledge(env, context, args.knowledge);
+			if (isOutcome(scope)) return scope;
+
+			// A named base restricts the search to it; otherwise the user's own
+			// files are tried first, then anything in a base they can see.
+			const inScope = scope
+				? scope.files.find((entry) => entry.filename.toLowerCase() === name.toLowerCase())
+				: null;
+			const file =
+				inScope ??
+				(scope
+					? null
+					: ((await findUserFile(env, userId, name)) ??
+						(await filesInKnowledge(env, await visibleKnowledge(env, userId))).find(
+							(entry) => entry.filename.toLowerCase() === name.toLowerCase()
+						)));
 			if (!file) return plain(`There is no file called ${name}.`, `No file named ${name}`);
 			if (!file.content) {
 				// Binary uploads carry no text: say why rather than returning blank.
@@ -509,10 +585,20 @@ async function runUserDataTool(
 					`${name} already exists`
 				);
 			}
+			const scope = await scopeToKnowledge(env, context, args.knowledge);
+			if (isOutcome(scope)) return scope;
+			if (scope && !(await canWrite(env, userId, scope.base))) {
+				return plain(
+					`You do not have write access to ${scope.base.name}.`,
+					`No write access to ${scope.base.name}`
+				);
+			}
+
 			const file = await createUserFile(env, userId, name, content);
+			if (scope) await attachFileToKnowledge(env, scope.base.id, file.id);
 			return plain(
-				`Created ${file.filename} (${content.length} characters).`,
-				`Created ${file.filename}`
+				`Created ${file.filename} (${content.length} characters)${scope ? ` in ${scope.base.name}` : ''}.`,
+				`Created ${file.filename}${scope ? ` in ${scope.base.name}` : ''}`
 			);
 		}
 
@@ -572,7 +658,8 @@ export const SEARCH_TOOLS = [
 			parameters: {
 				type: 'object',
 				properties: {
-					pattern: { type: 'string', description: 'A glob pattern matched against file names.' }
+					pattern: { type: 'string', description: 'A glob pattern matched against file names.' },
+					knowledge: { type: 'string', description: 'Search inside this knowledge base.' }
 				},
 				required: ['pattern']
 			}
@@ -591,6 +678,7 @@ export const SEARCH_TOOLS = [
 				properties: {
 					pattern: { type: 'string', description: 'A JavaScript regular expression.' },
 					glob: { type: 'string', description: 'Only search files whose name matches this glob.' },
+					knowledge: { type: 'string', description: 'Search inside this knowledge base.' },
 					case_sensitive: { type: 'boolean', description: 'Match case exactly. Defaults to false.' }
 				},
 				required: ['pattern']
@@ -627,29 +715,54 @@ async function runWorkspaceTool(
 
 	if (call.name === 'glob_files') {
 		const pattern = String(args.pattern ?? '*');
-		const hits = await globFiles(env, userId, pattern);
-		if (!hits.length) return plain(`No files match ${pattern}.`, `No files match ${pattern}`);
+		const scope = await scopeToKnowledge(env, context, args.knowledge);
+		if (isOutcome(scope)) return scope;
+
+		const matcher = globToRegExp(pattern.trim() || '*');
+		const hits = scope
+			? scope.files
+					.filter((file) => matcher.test(file.filename))
+					.map((file) => ({ filename: file.filename, characters: file.content.length }))
+			: await globFiles(env, userId, pattern);
+		const where = scope ? ` in ${scope.base.name}` : '';
+		if (!hits.length)
+			return plain(`No files match ${pattern}${where}.`, `No files match ${pattern}`);
 		const listed = hits.map((hit) => `- ${hit.filename} (${hit.characters} characters)`).join('\n');
-		return plain(`Files matching ${pattern}:\n${listed}`, `${hits.length} files match ${pattern}`);
+		return plain(
+			`Files matching ${pattern}${where}:\n${listed}`,
+			`${hits.length} files match ${pattern}${where}`
+		);
 	}
 
 	if (call.name === 'grep_files') {
 		const pattern = String(args.pattern ?? '');
-		const result = await grepFiles(env, userId, pattern, {
-			glob: args.glob ? String(args.glob) : undefined,
-			ignoreCase: args.case_sensitive ? false : true
-		});
+		const scope = await scopeToKnowledge(env, context, args.knowledge);
+		if (isOutcome(scope)) return scope;
+
+		const result = scope
+			? grepIn(
+					scope.files.map((file) => ({ filename: file.filename, content: file.content })),
+					pattern,
+					{ glob: args.glob ? String(args.glob) : undefined, ignoreCase: !args.case_sensitive }
+				)
+			: await grepFiles(env, userId, pattern, {
+					glob: args.glob ? String(args.glob) : undefined,
+					ignoreCase: args.case_sensitive ? false : true
+				});
 		if (result.error) return plain(result.error, `grep_files: ${result.error}`);
+		// Naming the base in the status matters as much as scoping to it: the user
+		// watching the strip should see where the model actually looked.
+		const where = scope ? ` in ${scope.base.name}` : '';
 		if (!result.hits.length) {
 			return plain(
-				`No matches for /${pattern}/ in ${result.filesSearched} files.`,
-				`No matches for ${pattern}`
+				`No matches for /${pattern}/ in ${result.filesSearched} files${where}.`,
+				`No matches for ${pattern}${where}`
 			);
 		}
 		const listed = result.hits.map((hit) => `${hit.filename}:${hit.line}: ${hit.text}`).join('\n');
 		return plain(
-			`Matches for /${pattern}/:\n${listed}`,
-			`${result.hits.length} matches for ${pattern}`
+			`Matches for /${pattern}/${where}:\n${listed}`,
+			`${result.hits.length} matches for ${pattern}${where}`
 		);
 	}
 
@@ -755,4 +868,107 @@ async function runTodoTool(
 		todos.length ? `Plan recorded:\n${renderTodos(todos)}` : 'Plan cleared.',
 		todoSummary(todos)
 	);
+}
+
+export const KNOWLEDGE_TOOLS = [
+	{
+		type: 'function',
+		function: {
+			name: 'list_knowledge',
+			description:
+				'List the knowledge bases the user can see, with how many files each holds. ' +
+				'Call this first when they mention a collection by name and you need its ' +
+				'exact name for the other tools.',
+			parameters: { type: 'object', properties: {}, required: [] }
+		}
+	},
+	{
+		type: 'function',
+		function: {
+			name: 'search_knowledge',
+			description:
+				"Search the contents of the user's knowledge bases and return the passages " +
+				'that match, as citable sources. This is the right tool for "what do my ' +
+				'documents say about X" — prefer it over reading whole files.',
+			parameters: {
+				type: 'object',
+				properties: {
+					query: { type: 'string', description: 'What to look for.' },
+					knowledge: {
+						type: 'string',
+						description: 'Limit to one knowledge base, by name. Omit to search all of them.'
+					}
+				},
+				required: ['query']
+			}
+		}
+	}
+] as const;
+
+/** Knowledge tools; returns null for anything it does not handle. */
+async function runKnowledgeTool(
+	env: Env,
+	call: ToolCall,
+	args: Record<string, any>,
+	context: ToolContext
+): Promise<ToolOutcome | null> {
+	if (call.name === 'list_knowledge') {
+		const bases = await visibleKnowledge(env, context.userId);
+		if (!bases.length) return plain('There are no knowledge bases.', 'No knowledge bases');
+		const files = await filesInKnowledge(env, bases);
+		const counts = new Map<string, number>();
+		for (const file of files)
+			counts.set(file.knowledge_id, (counts.get(file.knowledge_id) ?? 0) + 1);
+		const listed = bases
+			.map(
+				(base) =>
+					`- ${base.name} (${counts.get(base.id) ?? 0} files)${base.description ? ` — ${base.description}` : ''}`
+			)
+			.join('\n');
+		return plain(`Knowledge bases:\n${listed}`, `Listed ${bases.length} knowledge bases`);
+	}
+
+	if (call.name === 'search_knowledge') {
+		const query = String(args.query ?? '').trim();
+		if (!query) return plain('No query was given.', 'Search called with no query');
+
+		const named = args.knowledge ? String(args.knowledge) : '';
+		const bases = named
+			? ([await findKnowledge(env, context.userId, named)].filter(Boolean) as KnowledgeBase[])
+			: await visibleKnowledge(env, context.userId);
+		if (named && !bases.length) {
+			return plain(`There is no knowledge base called ${named}.`, `No knowledge base ${named}`);
+		}
+		if (!bases.length)
+			return plain('There are no knowledge bases to search.', 'No knowledge bases');
+
+		const chunks = await search(env, query, { knowledgeIds: bases.map((base) => base.id) });
+		if (!chunks.length) {
+			return plain(`Nothing in the knowledge bases matches "${query}".`, `No matches for ${query}`);
+		}
+
+		// Chunks carry a file id, not a name; resolve names once for citations.
+		const files = await filesInKnowledge(env, bases);
+		const byFile = new Map(files.map((file) => [file.id, file]));
+
+		const parts: string[] = [];
+		const sources: Record<string, unknown>[] = [];
+		for (const [index, chunk] of chunks.entries()) {
+			const file = chunk.file_id ? byFile.get(chunk.file_id) : undefined;
+			const name = file ? `${file.knowledge_name} / ${file.filename}` : 'knowledge';
+			parts.push(`<source id="${index + 1}" name="${name}">${chunk.content}</source>`);
+			sources.push({
+				source: { id: chunk.file_id ?? String(index), name },
+				document: [chunk.content],
+				metadata: [{ source: chunk.file_id ?? name, name, file_id: chunk.file_id }]
+			});
+		}
+		return {
+			content: parts.join('\n'),
+			sources,
+			status: `Searched knowledge for "${query}" (${sources.length} passage${sources.length === 1 ? '' : 's'})`
+		};
+	}
+
+	return null;
 }

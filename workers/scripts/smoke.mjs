@@ -506,7 +506,7 @@ if (models.data?.some((model) => model.id === 'mock-tools')) {
 				})
 			});
 			const content = await done;
-			return { content, statuses: [...socket.statuses] };
+			return { content, statuses: [...socket.statuses], sources: socket.sourceCount };
 		} finally {
 			socket.close();
 		}
@@ -570,6 +570,64 @@ if (models.data?.some((model) => model.id === 'mock-tools')) {
 			grepped.statuses.some((line) => /matches for bravo/.test(line)),
 			`no grep status: ${JSON.stringify(grepped.statuses)}`
 		);
+	});
+
+	await check('the model works with knowledge bases through the tools', async () => {
+		// A real base with a real file, driven end to end: list it, list its files,
+		// grep inside it, and search its contents for citable passages.
+		const kb = await api('/api/v1/knowledge/create', {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Tool KB', description: 'for the tool checks' })
+		});
+		const form = new FormData();
+		form.append(
+			'file',
+			new Blob(['Cloudflare Workers run JavaScript at the edge in V8 isolates.'], {
+				type: 'text/plain'
+			}),
+			'kb-note.txt'
+		);
+		const uploaded = await fetch(`${BASE}/api/v1/files/`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}` },
+			body: form
+		}).then((r) => r.json());
+		await api(`/api/v1/knowledge/${kb.id}/file/add`, {
+			method: 'POST',
+			body: JSON.stringify({ file_id: uploaded.id })
+		});
+		await new Promise((resolve) => setTimeout(resolve, 1200));
+
+		const listed = await toolTurn('TOOLTEST:kblist');
+		assert(
+			listed.statuses.some((line) => /Listed \d+ knowledge bases/.test(line)),
+			`list_knowledge did not run: ${JSON.stringify(listed.statuses)}`
+		);
+
+		const files = await toolTurn('TOOLTEST:kbfiles Tool KB');
+		assert(
+			files.statuses.some((line) => /files in Tool KB/i.test(line)),
+			`list_files did not scope to the base: ${JSON.stringify(files.statuses)}`
+		);
+
+		const grepped = await toolTurn('TOOLTEST:kbgrep Tool KB');
+		assert(
+			grepped.statuses.some((line) => /matches for Cloudflare in Tool KB/i.test(line)),
+			`grep did not scope to the base: ${JSON.stringify(grepped.statuses)}`
+		);
+
+		const searched = await toolTurn('TOOLTEST:kbsearch edge isolates');
+		assert(
+			searched.statuses.some((line) => /Searched knowledge for/.test(line)),
+			`search_knowledge did not run: ${JSON.stringify(searched.statuses)}`
+		);
+		assert(
+			searched.sources > 0,
+			`knowledge search returned no citable sources; statuses: ${JSON.stringify(searched.statuses)}`
+		);
+
+		await api(`/api/v1/knowledge/${kb.id}/delete`, { method: 'DELETE' }).catch(() => {});
+		await api(`/api/v1/files/${uploaded.id}`, { method: 'DELETE' }).catch(() => {});
 	});
 
 	await check('the model records a plan, and it survives into the next turn', async () => {

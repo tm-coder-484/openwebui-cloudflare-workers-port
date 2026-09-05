@@ -574,12 +574,13 @@ them is scoped to the id of the account whose turn it is, so a model naming
 another user's file gets "not found" — and none is a shell: there is no
 filesystem and no command execution anywhere in this port.
 
-| Group  | Tools                                                 | Config key            |
-| ------ | ----------------------------------------------------- | --------------------- |
-| Memory | `remember`, `recall`, `forget`                        | `tools.memory.enable` |
-| Files  | `list_files`, `read_file`, `create_file`, `edit_file` | `tools.files.enable`  |
-| Search | `glob_files`, `grep_files`, `search_chats`            | `tools.search.enable` |
-| Plan   | `todo_write`, `todo_read`                             | `tools.todo.enable`   |
+| Group     | Tools                                                 | Config key               |
+| --------- | ----------------------------------------------------- | ------------------------ |
+| Memory    | `remember`, `recall`, `forget`                        | `tools.memory.enable`    |
+| Files     | `list_files`, `read_file`, `create_file`, `edit_file` | `tools.files.enable`     |
+| Search    | `glob_files`, `grep_files`, `search_chats`            | `tools.search.enable`    |
+| Plan      | `todo_write`, `todo_read`                             | `tools.todo.enable`      |
+| Knowledge | `list_knowledge`, `search_knowledge`                  | `tools.knowledge.enable` |
 
 A turn allows **three rounds of tool calls** before the model has to answer —
 enough for search, read a result, search again. Raise it with `tools.max_rounds`
@@ -593,13 +594,14 @@ as **Worker variables** (Settings → Variables and Secrets) or through the conf
 API — the variable seeds the value on first read, the API changes it at runtime
 without a redeploy:
 
-| Variable              | Config key            | Value           |
-| --------------------- | --------------------- | --------------- |
-| `TOOLS_MAX_ROUNDS`    | `tools.max_rounds`    | 1-20, default 3 |
-| `ENABLE_MEMORY_TOOLS` | `tools.memory.enable` | true / false    |
-| `ENABLE_FILE_TOOLS`   | `tools.files.enable`  | true / false    |
-| `ENABLE_SEARCH_TOOLS` | `tools.search.enable` | true / false    |
-| `ENABLE_TODO_TOOLS`   | `tools.todo.enable`   | true / false    |
+| Variable                 | Config key               | Value           |
+| ------------------------ | ------------------------ | --------------- |
+| `TOOLS_MAX_ROUNDS`       | `tools.max_rounds`       | 1-20, default 3 |
+| `ENABLE_MEMORY_TOOLS`    | `tools.memory.enable`    | true / false    |
+| `ENABLE_FILE_TOOLS`      | `tools.files.enable`     | true / false    |
+| `ENABLE_SEARCH_TOOLS`    | `tools.search.enable`    | true / false    |
+| `ENABLE_TODO_TOOLS`      | `tools.todo.enable`      | true / false    |
+| `ENABLE_KNOWLEDGE_TOOLS` | `tools.knowledge.enable` | true / false    |
 
 ```bash
 curl -X POST "$WEBUI/api/v1/configs/tools" \
@@ -659,6 +661,24 @@ temporary chat has no row to keep it on, and the tool says so rather than
 failing the turn. And `chat.meta` is read-modify-written, shared with tags and
 pinning, so two turns running at once in the _same_ chat could overwrite each
 other's list — sequential tool calls within one turn are safe.
+
+**Knowledge** connects the rest to collections rather than loose files.
+`list_knowledge` names the bases and their file counts; `search_knowledge`
+searches their contents and returns matching passages as citable sources, which
+is the right tool for "what do my documents say about X".
+
+The file and search tools also take an optional `knowledge` argument, so
+`list_files`, `glob_files` and `grep_files` can work inside one base, `read_file`
+finds a file that lives only in a collection, and `create_file` can put what it
+writes straight into one. Without the argument they act on the user's own loose
+files, as before.
+
+Access is the part that matters. A knowledge base can be shared, by user or by
+group, for reading or for writing — so every one of those tools resolves the
+argument through the same visibility rule and `hasAccess` check the HTTP routes
+use, in **one** place rather than per tool. Naming a base you cannot see is
+refused identically whichever tool you name it on, and `create_file` additionally
+requires write access to the base, not merely sight of it.
 
 A `grep_files` pattern is a user-supplied regular expression, which is worth one
 guard: patterns are capped at 200 characters, and an invalid one is reported

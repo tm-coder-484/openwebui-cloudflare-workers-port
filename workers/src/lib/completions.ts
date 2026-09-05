@@ -547,6 +547,7 @@ export async function runCompletion(
 			'tools.files.enable',
 			'tools.search.enable',
 			'tools.todo.enable',
+			'tools.knowledge.enable',
 			'tools.max_rounds'
 		]);
 		const maxToolRounds = toolRounds(toolConfig['tools.max_rounds']);
@@ -557,7 +558,8 @@ export async function runCompletion(
 					files: toolConfig['tools.files.enable'] !== false,
 					search: toolConfig['tools.search.enable'] !== false,
 					// A plan is kept against the chat row, so it needs a saved chat.
-					todo: toolConfig['tools.todo.enable'] !== false && job.saveToChat
+					todo: toolConfig['tools.todo.enable'] !== false && job.saveToChat,
+					knowledge: toolConfig['tools.knowledge.enable'] !== false
 				})
 			: [];
 		let useTools = tools.length > 0;

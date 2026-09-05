@@ -3,6 +3,7 @@ import { FILE_TOOLS, MEMORY_TOOLS, SEARCH_TOOLS, runToolCall, toolsFor } from '.
 import { globToRegExp } from '../src/lib/workspace';
 import { toolRounds } from '../src/lib/completions';
 import { normalizeTodos, renderTodos, todoSummary } from '../src/lib/todos';
+import { KNOWLEDGE_TOOLS } from '../src/lib/tools';
 
 /**
  * A D1 + R2 stub backed by plain arrays, enough for the memory and file tools.
@@ -13,6 +14,8 @@ function fakeEnv() {
 	const memories: any[] = [];
 	const files: any[] = [];
 	const chats: any[] = [];
+	const knowledge: any[] = [];
+	const knowledgeFiles: any[] = [];
 
 	const run = (sql: string, args: any[]) => {
 		const s = sql.replace(/\s+/g, ' ').trim();
@@ -77,6 +80,28 @@ function fakeEnv() {
 			}
 			return [];
 		}
+		if (s.startsWith('SELECT id, role FROM user')) {
+			return [{ id: args[0], role: 'user' }];
+		}
+		if (s.includes('FROM knowledge') && s.includes('WHERE user_id = ? OR id IN')) {
+			// The stub grants nothing, so visibility is ownership.
+			return knowledge.filter((k) => k.user_id === args[0]);
+		}
+		if (s.includes('FROM file f') && s.includes('JOIN knowledge_file k')) {
+			const ids = new Set(args);
+			return knowledgeFiles
+				.filter((link) => ids.has(link.knowledge_id))
+				.map((link) => {
+					const file = files.find((f) => f.id === link.file_id);
+					return file ? { ...file, knowledge_id: link.knowledge_id } : null;
+				})
+				.filter(Boolean);
+		}
+		if (s.startsWith('INSERT INTO knowledge_file')) {
+			knowledgeFiles.push({ id: args[0], knowledge_id: args[1], file_id: args[2] });
+			return [];
+		}
+		if (s.includes('FROM access_grant') || s.includes('FROM group_member')) return [];
 		if (s.startsWith('SELECT * FROM chat WHERE id = ?1 AND user_id = ?2')) {
 			return chats.filter((c) => c.id === args[0] && c.user_id === args[1]);
 		}
@@ -105,6 +130,8 @@ function fakeEnv() {
 		memories,
 		files,
 		chats,
+		knowledge,
+		knowledgeFiles,
 		env: {
 			DB: { prepare: statement, batch: async () => [] },
 			FILES: { put: async () => {}, get: async () => null }
@@ -614,5 +641,101 @@ describe('plan tools', () => {
 		);
 		expect(write.content).toMatch(/not a saved chat/i);
 		expect(JSON.parse(fake.chats[0].meta).todos[0].content).toBe('Private step');
+	});
+});
+
+describe('knowledge tools', () => {
+	let fake: ReturnType<typeof fakeEnv>;
+	beforeEach(async () => {
+		fake = fakeEnv();
+		fake.knowledge.push({ id: 'kb-1', user_id: 'u1', name: 'Research', description: 'papers' });
+		fake.knowledge.push({ id: 'kb-2', user_id: 'u2', name: 'Private', description: 'theirs' });
+	});
+
+	const asU1 = { userId: 'u1' };
+
+	it('lists only the bases the caller can see', async () => {
+		const out = await runToolCall(fake.env, call('list_knowledge', {}), asU1);
+		expect(out.content).toContain('Research');
+		expect(out.content).not.toContain('Private');
+	});
+
+	it('adds a created file to a base and then finds it there', async () => {
+		await runToolCall(
+			fake.env,
+			call('create_file', {
+				name: 'paper.md',
+				content: 'Edge computing notes',
+				knowledge: 'Research'
+			}),
+			asU1
+		);
+		expect(fake.knowledgeFiles).toHaveLength(1);
+
+		const listed = await runToolCall(fake.env, call('list_files', { knowledge: 'Research' }), asU1);
+		expect(listed.content).toContain('paper.md');
+	});
+
+	it('greps and globs inside a named base', async () => {
+		await runToolCall(
+			fake.env,
+			call('create_file', {
+				name: 'in-kb.md',
+				content: 'alpha\nNEEDLE here\nbravo',
+				knowledge: 'Research'
+			}),
+			asU1
+		);
+		await runToolCall(
+			fake.env,
+			call('create_file', { name: 'loose.md', content: 'NEEDLE here' }),
+			asU1
+		);
+
+		const grepped = await runToolCall(
+			fake.env,
+			call('grep_files', { pattern: 'NEEDLE', knowledge: 'Research' }),
+			asU1
+		);
+		expect(grepped.content).toContain('in-kb.md:2:');
+		expect(grepped.content).not.toContain('loose.md');
+
+		const globbed = await runToolCall(
+			fake.env,
+			call('glob_files', { pattern: '*.md', knowledge: 'Research' }),
+			asU1
+		);
+		expect(globbed.content).toContain('in-kb.md');
+		expect(globbed.content).not.toContain('loose.md');
+	});
+
+	it('reads a file that lives only in a knowledge base', async () => {
+		await runToolCall(
+			fake.env,
+			call('create_file', { name: 'kbonly.md', content: 'inside the base', knowledge: 'Research' }),
+			asU1
+		);
+		const out = await runToolCall(fake.env, call('read_file', { name: 'kbonly.md' }), asU1);
+		expect(out.content).toContain('inside the base');
+	});
+
+	it('refuses a base the caller cannot see, on every tool that takes one', async () => {
+		// The scoping resolver is the single boundary; this is what proves it.
+		for (const [name, args] of [
+			['list_files', { knowledge: 'Private' }],
+			['glob_files', { pattern: '*', knowledge: 'Private' }],
+			['grep_files', { pattern: 'a', knowledge: 'Private' }],
+			['read_file', { name: 'x.md', knowledge: 'Private' }],
+			['create_file', { name: 'x.md', content: 'x', knowledge: 'Private' }]
+		] as [string, Record<string, unknown>][]) {
+			const out = await runToolCall(fake.env, call(name, args), asU1);
+			expect(out.content).toMatch(/no knowledge base called Private/i);
+		}
+		expect(fake.knowledgeFiles).toHaveLength(0);
+	});
+
+	it('says so when a named base does not exist at all', async () => {
+		const out = await runToolCall(fake.env, call('list_files', { knowledge: 'Nonsense' }), asU1);
+		expect(out.content).toMatch(/no knowledge base called Nonsense/i);
 	});
 });

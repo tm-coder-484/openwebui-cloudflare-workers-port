@@ -147,6 +147,7 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'tools.files.enable': true,
 	'tools.search.enable': true,
 	'tools.todo.enable': true,
+	'tools.knowledge.enable': true,
 	// Tool rounds per turn, clamped to 1-20 when read.
 	'tools.max_rounds': 3,
 	'chat.tool_permissions.enable': false,
@@ -296,6 +297,8 @@ function envDefaults(env: Env): Record<string, unknown> {
 		seeded['tools.search.enable'] = toBool(env.ENABLE_SEARCH_TOOLS);
 	if (env.ENABLE_TODO_TOOLS !== undefined)
 		seeded['tools.todo.enable'] = toBool(env.ENABLE_TODO_TOOLS);
+	if (env.ENABLE_KNOWLEDGE_TOOLS !== undefined)
+		seeded['tools.knowledge.enable'] = toBool(env.ENABLE_KNOWLEDGE_TOOLS);
 
 	if (env.ENABLE_NVIDIA_API !== undefined) seeded['nvidia.enable'] = toBool(env.ENABLE_NVIDIA_API);
 	if (env.NVIDIA_API_KEY) seeded['nvidia.api_key'] = env.NVIDIA_API_KEY;
