@@ -19,6 +19,7 @@ dayjs.extend(localizedFormat);
 
 import { TTS_RESPONSE_SPLIT } from '$lib/types';
 
+import './pdfPolyfill';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
 import { marked } from 'marked';
