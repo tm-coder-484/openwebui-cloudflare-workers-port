@@ -85,17 +85,80 @@ export function renderMessages(
 		.join('\n');
 }
 
-/** Task models answer with JSON; providers like to wrap it in prose or fences. */
-export function extractJSON<T = Record<string, unknown>>(text: string): T | null {
-	if (!text) return null;
-	const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
-	const candidate = fenced ? fenced[1] : text;
-	const start = candidate.indexOf('{');
-	const end = candidate.lastIndexOf('}');
-	if (start === -1 || end === -1 || end < start) return null;
-	try {
-		return JSON.parse(candidate.slice(start, end + 1)) as T;
-	} catch {
-		return null;
+/**
+ * Removes a reasoning model's thinking from its answer.
+ *
+ * Providers disagree about where thinking goes. Some return it in a separate
+ * `reasoning_content` field, which never reaches here; others leave it inline
+ * in the content, wrapped in `<think>`. The second kind broke every background
+ * task, because a model reasoning about JSON writes JSON while it reasons —
+ * scanning from the first `{` to the last `}` then spans the draft, the prose
+ * between, and the real answer.
+ *
+ * An unterminated block is stripped to the end of the text: that is what a
+ * thought cut off by the token budget looks like, and keeping it would only
+ * feed the parser the same braces.
+ */
+export function stripThinking(text: string): string {
+	if (!text) return '';
+	return text
+		.replace(/<(think|thinking|reasoning)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+		.replace(/<(think|thinking|reasoning)\b[^>]*>[\s\S]*$/i, '')
+		.trim();
+}
+
+/** Every balanced `{…}` in the text, outermost first, in the order they start. */
+function jsonCandidates(text: string): string[] {
+	const found: string[] = [];
+	let depth = 0;
+	let start = -1;
+	let inString = false;
+	let escaped = false;
+
+	for (let i = 0; i < text.length; i += 1) {
+		const char = text[i];
+		if (inString) {
+			if (escaped) escaped = false;
+			else if (char === '\\') escaped = true;
+			else if (char === '"') inString = false;
+			continue;
+		}
+		if (char === '"') inString = true;
+		else if (char === '{') {
+			if (depth === 0) start = i;
+			depth += 1;
+		} else if (char === '}' && depth > 0) {
+			depth -= 1;
+			if (depth === 0) found.push(text.slice(start, i + 1));
+		}
 	}
+	return found;
+}
+
+/**
+ * Task models answer with JSON; providers like to wrap it in prose or fences,
+ * and reasoning models like to draft it aloud first.
+ *
+ * `wanted` names the key the caller is after. When several JSON objects survive
+ * the thinking strip, the last one carrying that key wins — a model that
+ * reconsiders states its final answer last, so that is the one it meant.
+ */
+export function extractJSON<T = Record<string, unknown>>(text: string, wanted?: string): T | null {
+	if (!text) return null;
+	const cleaned = stripThinking(text);
+	const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(cleaned);
+	const candidates = jsonCandidates(fenced ? fenced[1] : cleaned);
+
+	let fallback: T | null = null;
+	for (const candidate of candidates) {
+		let parsed: T;
+		try {
+			parsed = JSON.parse(candidate) as T;
+		} catch {
+			continue;
+		}
+		if (!wanted) fallback = parsed;
+		else if ((parsed as Record<string, unknown>)?.[wanted] !== undefined) fallback = parsed;
+	}
+	return fallback;
 }

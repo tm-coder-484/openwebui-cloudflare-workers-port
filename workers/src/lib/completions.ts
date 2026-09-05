@@ -18,6 +18,7 @@ import {
 	TAGS_GENERATION_PROMPT,
 	TITLE_GENERATION_PROMPT,
 	extractJSON,
+	stripThinking,
 	renderMessages
 } from './prompts';
 import { fullText, search } from './retrieval';
@@ -925,7 +926,7 @@ export async function generateSearchQueries(
 
 	try {
 		const reply = await generateText(env, model, [{ role: 'user', content: prompt }], {
-			maxTokens: 200
+			maxTokens: TASK_TOKENS
 		});
 		const queries = parseQueries(reply);
 		return queries.length ? queries.slice(0, 3) : [fallback];
@@ -935,25 +936,26 @@ export async function generateSearchQueries(
 	}
 }
 
-/** Pulls a query list out of a reply that may or may not be clean JSON. */
+/**
+ * Pulls a query list out of a reply that may or may not be clean JSON.
+ *
+ * A reasoning model drafts the JSON while it thinks, so both readings below
+ * work on the answer with the thinking removed: a greedy `{…}` match would
+ * otherwise span the draft and the answer, and the line fallback would take the
+ * first line of the thought as the search query.
+ */
 export function parseQueries(reply: string): string[] {
-	const match = reply.match(/\{[\s\S]*\}/);
-	if (match) {
-		try {
-			const parsed = JSON.parse(match[0]);
-			if (Array.isArray(parsed?.queries)) {
-				return parsed.queries.map((q: unknown) => String(q).trim()).filter(Boolean);
-			}
-		} catch {
-			/* fall through to the line-based reading */
-		}
+	const parsed = extractJSON<{ queries?: unknown }>(reply, 'queries');
+	if (Array.isArray(parsed?.queries)) {
+		const queries = parsed.queries.map((q: unknown) => String(q).trim()).filter(Boolean);
+		if (queries.length) return queries;
 	}
 	// A model that ignored the format at least tends to put the query on its
 	// own line; anything longer than a search query is not one.
-	const line = reply
+	const line = stripThinking(reply)
 		.split('\n')
 		.map((entry) => entry.replace(/^[-*\d.\s"']+|["']+$/g, '').trim())
-		.find((entry) => entry.length > 0 && entry.length < 200);
+		.find((entry) => entry.length > 0 && entry.length < 200 && !/[{}]/.test(entry));
 	return line ? [line] : [];
 }
 
@@ -1246,6 +1248,15 @@ export async function taskModelId(env: Env, fallbackModelId: string): Promise<st
 	return configured || fallbackModelId;
 }
 
+/**
+ * How much room a background task answer gets.
+ *
+ * A reasoning model spends this on thinking before it answers, so the old
+ * ceiling of 100 tokens for a title bought a truncated thought and no JSON.
+ * These tasks ask for a handful of words either way.
+ */
+const TASK_TOKENS = 1200;
+
 async function runBackgroundTasks(
 	env: Env,
 	job: CompletionJob,
@@ -1271,9 +1282,9 @@ async function runBackgroundTasks(
 		try {
 			const prompt = TITLE_GENERATION_PROMPT.replace('{{MESSAGES}}', renderMessages(history, 2));
 			const raw = await generateText(env, model, [{ role: 'user', content: prompt }], {
-				maxTokens: 100
+				maxTokens: TASK_TOKENS
 			});
-			const title = extractJSON<{ title?: string }>(raw)?.title?.trim();
+			const title = extractJSON<{ title?: string }>(raw, 'title')?.title?.trim();
 			if (title) {
 				await setChatTitle(env, job.chatId, title);
 				await emit({
@@ -1291,9 +1302,9 @@ async function runBackgroundTasks(
 		try {
 			const prompt = TAGS_GENERATION_PROMPT.replace('{{MESSAGES}}', renderMessages(history, 6));
 			const raw = await generateText(env, model, [{ role: 'user', content: prompt }], {
-				maxTokens: 200
+				maxTokens: TASK_TOKENS
 			});
-			const tags = extractJSON<{ tags?: string[] }>(raw)?.tags;
+			const tags = extractJSON<{ tags?: string[] }>(raw, 'tags')?.tags;
 			if (Array.isArray(tags) && tags.length) {
 				await setChatTags(env, job.chatId, job.userId, tags.slice(0, 6).map(String));
 				await emit({
@@ -1314,9 +1325,9 @@ async function runBackgroundTasks(
 				renderMessages(history, 6)
 			);
 			const raw = await generateText(env, model, [{ role: 'user', content: prompt }], {
-				maxTokens: 300
+				maxTokens: TASK_TOKENS
 			});
-			const followUps = extractJSON<{ follow_ups?: string[] }>(raw)?.follow_ups;
+			const followUps = extractJSON<{ follow_ups?: string[] }>(raw, 'follow_ups')?.follow_ups;
 			if (Array.isArray(followUps) && followUps.length) {
 				await upsertMessage(env, job.chatId, job.messageId, { followUps });
 				await emit({

@@ -769,6 +769,28 @@ if (models.data?.some((model) => model.id === 'mock-reasoner')) {
 			socket.close();
 		}
 	});
+
+	await check('a reasoning model still gets a usable title', async () => {
+		// The task budget is spent on thinking first, and a model reasoning about
+		// JSON writes JSON while it reasons — so a truncated thought left no JSON
+		// at all, and an untruncated one left several for the parser to trip on.
+		const res = await api('/api/v1/tasks/title/completions', {
+			method: 'POST',
+			body: JSON.stringify({
+				model: 'mock-reasoner',
+				messages: [{ role: 'user', content: 'how do I deploy this to cloudflare' }]
+			})
+		});
+		const answer = res?.choices?.[0]?.message?.content ?? '';
+		assert(!/<think/i.test(answer), `the thinking leaked into the answer: ${answer.slice(0, 80)}`);
+
+		// Parsed the way the frontend parses it, first brace to last.
+		const start = answer.indexOf('{');
+		const end = answer.lastIndexOf('}');
+		assert(start !== -1 && end > start, `no JSON in the title answer: ${answer.slice(0, 120)}`);
+		const title = JSON.parse(answer.slice(start, end + 1))?.title;
+		assert(title && String(title).trim().length > 0, `no title came back: ${answer.slice(0, 120)}`);
+	});
 }
 
 // --- Admin config shapes --------------------------------------------------

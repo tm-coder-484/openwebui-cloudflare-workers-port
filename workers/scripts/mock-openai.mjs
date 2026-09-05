@@ -13,6 +13,10 @@ import { createServer } from 'node:http';
 const PORT = Number(process.env.MOCK_OPENAI_PORT ?? 11435);
 // `mock-reasoner` streams reasoning_content the way a thinking model does,
 // which is the case that used to render as an empty message.
+// Milliseconds between streamed tokens. The default keeps the suites quick;
+// raise it to watch a slow model stream, which is when in-progress rendering
+// matters and when a fast one is too quick to observe.
+const TOKEN_DELAY = Number(process.env.MOCK_OPENAI_DELAY ?? 20);
 let busyOnceServed = false;
 const MODELS = ['mock-gpt', 'mock-gpt-mini', 'mock-reasoner', 'mock-tools', 'mock-no-tools'];
 
@@ -225,6 +229,46 @@ createServer(async (req, res) => {
 		const content = reply(body.messages);
 
 		if (!body.stream) {
+			// A reasoning model thinks before it answers, and providers disagree
+			// about where that goes. Two shapes matter for the background tasks:
+			//
+			//   - the thinking arrives inline in `content`, wrapped in <think>,
+			//     and is full of braces, which is what breaks a parser that scans
+			//     from the first `{` to the last `}`;
+			//   - the budget runs out mid-thought, so the answer never arrives at
+			//     all and `content` holds only a truncated thought.
+			//
+			// Both are what "title generation is unreliable with reasoning models"
+			// looks like from the server.
+			if (body.model === 'mock-reasoner') {
+				const thought =
+					'<think>\nLet me consider the format. They want { "title": "..." } as ' +
+					'raw JSON. I could answer {"title": "Draft"} but let me reconsider — ' +
+					'a shorter phrasing reads better.\n</think>\n';
+				// max_tokens is spent on thinking first, exactly as upstream spends it.
+				const budget = body.max_tokens ?? body.max_completion_tokens ?? 1000;
+				const truncated = budget < 400;
+				const payload = truncated ? thought.slice(0, 200) : thought + content;
+				res.writeHead(200, { 'Content-Type': 'application/json' });
+				res.end(
+					JSON.stringify({
+						id: 'mock-1',
+						object: 'chat.completion',
+						created: Math.floor(Date.now() / 1000),
+						model: body.model,
+						choices: [
+							{
+								index: 0,
+								message: { role: 'assistant', content: payload },
+								finish_reason: truncated ? 'length' : 'stop'
+							}
+						],
+						usage: { prompt_tokens: 10, completion_tokens: 300, total_tokens: 310 }
+					})
+				);
+				return;
+			}
+
 			res.writeHead(200, { 'Content-Type': 'application/json' });
 			res.end(
 				JSON.stringify({
@@ -284,7 +328,7 @@ createServer(async (req, res) => {
 				})}\n\n`
 			);
 			index += 1;
-		}, 20);
+		}, TOKEN_DELAY);
 		return;
 	}
 
