@@ -196,6 +196,11 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'rag.template': '',
 	'rag.embedding_engine': 'workers-ai',
 	'rag.embedding_model': '@cf/baai/bge-base-en-v1.5',
+	'rag.embedding_batch_size': 1,
+	'rag.embedding_openai.key': '',
+	'rag.embedding_openai.url': '',
+	'rag.embedding_ollama.key': '',
+	'rag.embedding_ollama.url': '',
 	'rag.hybrid_search': false,
 	'rag.full_context': false,
 	// The Documents screen's other name for the same thing: skip retrieval and

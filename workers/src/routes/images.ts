@@ -37,6 +37,23 @@ async function imageConfig(c: any) {
 	const config = await getConfigMany(c.env, Object.values(IMAGE_KEYS));
 	const out: Record<string, unknown> = {};
 	for (const [field, key] of Object.entries(IMAGE_KEYS)) out[field] = config[key] ?? null;
+
+	// The screen dereferences these in `onMount` before it knows which engine is
+	// selected — `config.COMFYUI_WORKFLOW_NODES.find(...)` runs even when ComfyUI
+	// is not in use — so a missing array is not a blank field, it is a TypeError
+	// that stops the whole tab from mounting. ComfyUI and Automatic1111 are not
+	// implemented in this port; the fields exist so the screen can render.
+	for (const field of ['COMFYUI_WORKFLOW_NODES', 'IMAGES_EDIT_COMFYUI_WORKFLOW_NODES']) {
+		out[field] = out[field] ?? [];
+	}
+	for (const field of [
+		'COMFYUI_WORKFLOW',
+		'IMAGES_EDIT_COMFYUI_WORKFLOW',
+		'AUTOMATIC1111_PARAMS',
+		'IMAGES_OPENAI_API_PARAMS'
+	]) {
+		out[field] = out[field] ?? '';
+	}
 	return c.json(out);
 }
 
