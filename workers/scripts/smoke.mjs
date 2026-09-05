@@ -198,8 +198,14 @@ if (isAdmin || session.permissions?.workspace?.knowledge) {
 			method: 'POST',
 			body: JSON.stringify({ file_id: fileId })
 		});
+		// The detail screen does `res.items` and then reads `.length` on it, so a
+		// bare array here blanked the page with "reading 'length' of undefined".
 		const files = await api(`/api/v1/knowledge/${knowledge.id}/files`);
-		assert(files.length === 1, 'file not attached');
+		assert(!Array.isArray(files), 'the base detail endpoint still answers with a bare array');
+		assert(Array.isArray(files.items), 'the base detail endpoint has no items array');
+		assert(Array.isArray(files.directories), 'the base detail endpoint has no directories array');
+		assert(Array.isArray(files.breadcrumbs), 'the base detail endpoint has no breadcrumbs array');
+		assert(files.items.length === 1, 'file not attached');
 		const search = await api('/api/v1/retrieval/query/collection', {
 			method: 'POST',
 			body: JSON.stringify({ collection_names: [knowledge.id], query: 'edge javascript', k: 3 })
@@ -689,6 +695,80 @@ if (models.data?.some((model) => model.id === 'mock-tools')) {
 		);
 		await api(`/api/v1/files/${created.id}`, { method: 'DELETE' }).catch(() => {});
 	});
+
+	await check('a tool call is written where it happened, as a details block', async () => {
+		// The frontend tokenises `<details>` only at the start of a markdown
+		// block: a tag glued to the end of the previous line is parsed as inline
+		// HTML and renders as nothing. That is invisible for a block that opens
+		// the message and breaks every later one — which is where a tool call is.
+		const turn = await toolTurn('TOOLTEST:glob');
+		const at = turn.content.indexOf('<details type="tool_calls"');
+		assert(at >= 0, `no tool call block in the message: ${turn.content.slice(0, 200)}`);
+		assert(
+			at === 0 || turn.content.slice(at - 2, at) === '\n\n',
+			`the tool call block does not start a markdown block: ${JSON.stringify(
+				turn.content.slice(Math.max(0, at - 30), at + 40)
+			)}`
+		);
+
+		// Everything variable belongs in the body: the frontend reads attributes
+		// with /(\w+)="(.*?)"/g, which has no notion of an escape, so a quote in
+		// a JSON argument would end the value and the rest of the tag be misread.
+		const tag = turn.content.slice(at, turn.content.indexOf('>', at) + 1);
+		const attributes = [...tag.matchAll(/(\w+)="(.*?)"/g)].map(([, key]) => key);
+		assert(
+			attributes.join(',') === 'type,done,id,name',
+			`unexpected attributes on the tool call block: ${attributes.join(',')}`
+		);
+		assert(turn.content.includes('Arguments:'), 'the block does not show what was called');
+	});
+}
+
+if (models.data?.some((model) => model.id === 'mock-reasoner')) {
+	await check('a model that thinks twice gets two blocks, both renderable', async () => {
+		const socket = await connectSocket(token);
+		try {
+			socket.resetEvents();
+			const messageId = crypto.randomUUID();
+			const done = socket.waitFor(messageId);
+			await api('/api/chat/completions', {
+				method: 'POST',
+				body: JSON.stringify({
+					stream: true,
+					model: 'mock-reasoner',
+					messages: [{ role: 'user', content: 'think about this twice' }],
+					id: messageId,
+					parent_id: null,
+					session_id: socket.sid,
+					user_message: {
+						id: crypto.randomUUID(),
+						parentId: null,
+						childrenIds: [],
+						role: 'user',
+						content: 'think twice'
+					},
+					background_tasks: {}
+				})
+			});
+			const content = await done;
+
+			const opens = [...content.matchAll(/<details type="reasoning">/g)].map((m) => m.index);
+			assert(opens.length === 2, `expected two reasoning blocks, got ${opens.length}`);
+			assert(
+				content.startsWith('<details type="reasoning">'),
+				`the first block does not start the message: ${JSON.stringify(content.slice(0, 40))}`
+			);
+			assert(
+				content.slice(opens[1] - 2, opens[1]) === '\n\n',
+				`the second block does not start a markdown block: ${JSON.stringify(
+					content.slice(opens[1] - 30, opens[1] + 30)
+				)}`
+			);
+			assert((content.match(/<\/details>/g) ?? []).length === 2, 'a reasoning block was left open');
+		} finally {
+			socket.close();
+		}
+	});
 }
 
 // --- Admin config shapes --------------------------------------------------
@@ -732,6 +812,79 @@ if (isAdmin) {
 			}
 		});
 	}
+
+	await check('every workspace listing gets {items,total,page}', async () => {
+		// The screens do `res.items` and `res.total` with no guard. A bare array
+		// left both undefined, so the list rendered "No … found" while the tab
+		// counter — which falls back to `array.length` — showed the real number.
+		for (const path of [
+			'/api/v1/prompts/list?page=1',
+			'/api/v1/models/list?page=1',
+			'/api/v1/skills/list?page=1',
+			'/api/v1/knowledge/search?page=1'
+		]) {
+			const body = await api(path);
+			assert(!Array.isArray(body), `${path} still answers with a bare array`);
+			assert(Array.isArray(body.items), `${path} has no items array`);
+			assert(typeof body.total === 'number', `${path} reports no total`);
+		}
+	});
+
+	await check('the endpoints that are meant to be arrays still are', async () => {
+		// The composer's slash-command menu, the model picker and the export all
+		// read these as arrays; fixing the listings must not have moved them too.
+		for (const path of ['/api/v1/prompts/', '/api/v1/models/', '/api/v1/skills/export']) {
+			assert(Array.isArray(await api(path)), `${path} is no longer an array`);
+		}
+	});
+
+	await check('workspace rows say who owns them and who may edit them', async () => {
+		// Without `write_access` every row renders locked — a knowledge base its
+		// own owner could not rename. Without `user` every row says "Deleted User".
+		for (const path of [
+			'/api/v1/prompts/list?page=1',
+			'/api/v1/models/list?page=1',
+			'/api/v1/skills/list?page=1',
+			'/api/v1/knowledge/search?page=1',
+			'/api/v1/tools/list'
+		]) {
+			const body = await api(path);
+			const items = Array.isArray(body) ? body : body.items;
+			for (const item of items) {
+				assert(
+					typeof item.write_access === 'boolean',
+					`${path} does not say whether ${item.id} is editable`
+				);
+				assert(
+					item.user?.name || item.user?.email,
+					`${path} does not name the owner of ${item.id}`
+				);
+			}
+			// Everything here belongs to the account running the suite.
+			assert(
+				items.every((item) => item.write_access === true),
+				`${path} reports the caller cannot edit their own rows`
+			);
+		}
+	});
+
+	await check('a listing can be searched, filtered and sorted', async () => {
+		const all = await api('/api/v1/knowledge/search?page=1');
+		if (all.total > 1) {
+			const asc = await api('/api/v1/knowledge/search?page=1&order_by=name&direction=asc');
+			const desc = await api('/api/v1/knowledge/search?page=1&order_by=name&direction=desc');
+			assert(
+				asc.items[0]?.name !== desc.items[0]?.name,
+				'order_by/direction changed nothing — the sort is being ignored'
+			);
+		}
+		const mine = await api('/api/v1/knowledge/search?page=1&view_option=created');
+		const theirs = await api('/api/v1/knowledge/search?page=1&view_option=shared');
+		assert(
+			mine.total + theirs.total === all.total,
+			`view_option does not partition the list: ${mine.total} + ${theirs.total} !== ${all.total}`
+		);
+	});
 
 	await check('the knowledge pickers get {items,total,page}, not a bare array', async () => {
 		// The composer's knowledge picker does `res.items.map(...)` with no guard,
