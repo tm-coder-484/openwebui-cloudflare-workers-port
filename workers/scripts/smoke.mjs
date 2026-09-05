@@ -205,6 +205,11 @@ if (isAdmin || session.permissions?.workspace?.knowledge) {
 			body: JSON.stringify({ collection_names: [knowledge.id], query: 'edge javascript', k: 3 })
 		});
 		assert((search.documents?.[0] ?? []).length > 0, 'retrieval returned nothing');
+
+		// Tidy up after itself: without this every run left another knowledge base
+		// behind, and a machine that had run the suite thirty times had thirty of
+		// them cluttering the picker.
+		await api(`/api/v1/knowledge/${knowledge.id}/delete`, { method: 'DELETE' }).catch(() => {});
 	});
 }
 
@@ -669,6 +674,30 @@ if (isAdmin) {
 			}
 		});
 	}
+
+	await check('the knowledge pickers get {items,total,page}, not a bare array', async () => {
+		// The composer's knowledge picker does `res.items.map(...)` with no guard,
+		// so a bare array threw and the panel never opened.
+		for (const path of [
+			'/api/v1/knowledge/search?page=1',
+			'/api/v1/knowledge/search/files?page=1'
+		]) {
+			const body = await api(path);
+			assert(!Array.isArray(body), `${path} still answers with a bare array`);
+			assert(Array.isArray(body.items), `${path} has no items array`);
+			assert(typeof body.total === 'number', `${path} reports no total`);
+		}
+	});
+
+	await check('knowledge file search returns files, not retrieval chunks', async () => {
+		const body = await api('/api/v1/knowledge/search/files?page=1');
+		for (const item of body.items) {
+			// The picker renders item.filename and item.collection.name; a chunk has
+			// neither, so the panel would open on an unusable list.
+			assert(typeof item.filename === 'string', 'an item has no filename');
+			assert(item.collection?.name, 'an item names no knowledge base');
+		}
+	});
 
 	await check('the tool settings can actually be changed', async () => {
 		// They shipped with a default and no way to set it — no key map, no
