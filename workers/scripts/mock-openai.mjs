@@ -262,9 +262,12 @@ createServer(async (req, res) => {
 				res.end();
 				return;
 			}
-			// A thinking model streams its working first, as reasoning_content,
-			// and only then the answer. Both arrive on `delta`.
-			const thinking = body.model === 'mock-reasoner' && index < 3;
+			// A thinking model streams its working as reasoning_content and its
+			// answer as content, both on `delta`. It thinks twice: once before
+			// answering and once in the middle, which is the case that used to
+			// render as nothing at all because the reopened block was glued to
+			// the end of the previous line instead of starting its own.
+			const thinking = body.model === 'mock-reasoner' && (index < 3 || (index >= 6 && index < 8));
 			const token = (index ? ' ' : '') + words[index];
 			res.write(
 				`data: ${JSON.stringify({
