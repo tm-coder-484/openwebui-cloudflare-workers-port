@@ -23,11 +23,11 @@ import {
 import { fullText, search } from './retrieval';
 import { resultText, webSearch } from './websearch';
 import {
-	WEB_TOOLS,
 	isToolsUnsupported,
 	runToolCall,
 	searchPlan,
-	toolCallAccumulator
+	toolCallAccumulator,
+	toolsFor
 } from './tools';
 import { HttpError, now, toJSON } from './util';
 
@@ -36,9 +36,27 @@ import { HttpError, now, toJSON } from './util';
  *
  * Three is enough for search → read a result → search again with what it
  * learned, which is the pattern worth supporting; beyond that a model is
- * usually stuck rather than working.
+ * usually stuck rather than working. Raise it with `tools.max_rounds` for
+ * longer chains — file work in particular can want more, since glob, grep,
+ * read and edit are four rounds on their own.
+ *
+ * Clamped rather than trusted: a round is a whole model call plus its tool
+ * work, so an unbounded value is a turn that never ends and a bill to match.
  */
-const MAX_TOOL_ROUNDS = 3;
+const DEFAULT_TOOL_ROUNDS = 3;
+const MAX_TOOL_ROUNDS_LIMIT = 20;
+
+export function toolRounds(configured: unknown): number {
+	// `null` is what an unset config row reads as, and Number(null) is 0 — which
+	// would clamp to a single round and quietly disable multi-step tool use on
+	// any deployment that had never set the key.
+	if (configured === null || configured === undefined || configured === '') {
+		return DEFAULT_TOOL_ROUNDS;
+	}
+	const value = Number(configured);
+	if (!Number.isFinite(value)) return DEFAULT_TOOL_ROUNDS;
+	return Math.min(Math.max(Math.floor(value), 1), MAX_TOOL_ROUNDS_LIMIT);
+}
 
 /** OpenAI sampling parameters we forward; everything else is Open WebUI's own. */
 const FORWARDED_PARAMS = new Set([
@@ -518,8 +536,28 @@ export async function runCompletion(
 		// hand and can still search again for what they did not cover.
 		const webSearchOn = Boolean(job.body.features?.web_search);
 		const mode = String((await getConfig(env, 'web.search.mode')) ?? 'always');
-		const plan = searchPlan(mode, webSearchOn, resolved.workersAI !== true);
-		let useTools = plan.tools;
+		const canCallTools = resolved.workersAI !== true;
+		const plan = searchPlan(mode, webSearchOn, canCallTools);
+
+		// Memory and file tools do not depend on web search being on for the turn,
+		// so the tool list is assembled from every enabled group rather than from
+		// the search mode alone.
+		const toolConfig = await getConfigMany(env, [
+			'tools.memory.enable',
+			'tools.files.enable',
+			'tools.search.enable',
+			'tools.max_rounds'
+		]);
+		const maxToolRounds = toolRounds(toolConfig['tools.max_rounds']);
+		const tools = canCallTools
+			? toolsFor({
+					web: plan.tools,
+					memory: toolConfig['tools.memory.enable'] !== false,
+					files: toolConfig['tools.files.enable'] !== false,
+					search: toolConfig['tools.search.enable'] !== false
+				})
+			: [];
+		let useTools = tools.length > 0;
 		let preSearched = plan.preSearch;
 
 		if (plan.preSearch) {
@@ -586,9 +624,7 @@ export async function runCompletion(
 					payload: {
 						...request.payload,
 						messages,
-						...(useTools && round < MAX_TOOL_ROUNDS
-							? { tools: WEB_TOOLS, tool_choice: 'auto' }
-							: {})
+						...(useTools && round < maxToolRounds ? { tools, tool_choice: 'auto' } : {})
 					}
 				};
 
@@ -610,8 +646,10 @@ export async function runCompletion(
 					console.warn('[open-webui] model rejected tools; searching before the turn instead');
 					useTools = false;
 					// In combo mode the pre-search has already run; searching again
-					// would duplicate its sources as well as its cost.
-					if (!preSearched) {
+					// would duplicate its sources as well as its cost. And a turn that
+					// only offered memory or file tools must not start searching the web
+					// just because the model refused them.
+					if (webSearchOn && !preSearched) {
 						await runWebSearch(env, job, emit);
 						preSearched = true;
 					}
@@ -648,7 +686,7 @@ export async function runCompletion(
 						}
 					});
 
-					const outcome = await runToolCall(env, call).catch((error) => ({
+					const outcome = await runToolCall(env, call, { userId: job.userId }).catch((error) => ({
 						content: `The tool failed: ${(error as Error).message}`,
 						sources: [] as Record<string, unknown>[],
 						status: `${call.name} failed`

@@ -566,6 +566,69 @@ to searching first and asks again without tools, which is why these are safe to
 leave on for a mixed set of models. In `combo` that fallback costs nothing
 extra, since the search has already run.
 
+### Tools the model can call
+
+Beyond web search, a model that supports tool calling is offered three more
+groups. All act **only on the calling user's own data** — every statement behind
+them is scoped to the id of the account whose turn it is, so a model naming
+another user's file gets "not found" — and none is a shell: there is no
+filesystem and no command execution anywhere in this port.
+
+| Group  | Tools                                                 | Config key            |
+| ------ | ----------------------------------------------------- | --------------------- |
+| Memory | `remember`, `recall`, `forget`                        | `tools.memory.enable` |
+| Files  | `list_files`, `read_file`, `create_file`, `edit_file` | `tools.files.enable`  |
+| Search | `glob_files`, `grep_files`, `search_chats`            | `tools.search.enable` |
+
+A turn allows **three rounds of tool calls** before the model has to answer —
+enough for search, read a result, search again. Raise it with `tools.max_rounds`
+for longer chains; file work in particular can want more, since glob, grep, read
+and edit are four rounds on their own. The value is clamped to 1-20 rather than
+trusted: a round is a whole model call plus its tool work, so an unbounded value
+is a turn that never ends and a bill to match.
+
+All default to on, and are switched through the config API
+(`POST /api/v1/configs/...`) rather than a settings screen. They do **not**
+require web search to be enabled for the turn — the search mode governs the
+search tools only.
+
+**Memory** makes the existing per-user memories something the model reaches for
+rather than something injected: it saves a fact when the user tells it one, and
+looks it up when an answer depends on their setup or preferences. `recall`
+returns each memory with its id, which is what `forget` takes, so removing a
+memory the user says is wrong takes two calls and no guessing.
+
+**Files** operate on the same uploads as the Files list: a "file" is a row in D1
+with its bytes in R2, so anything the model writes shows up in the UI, can be
+attached to a later chat, and is indexed for retrieval like any other upload.
+Two deliberate refusals:
+
+- `create_file` will not overwrite an existing name — silently replacing a file
+  would lose whatever was in it. The model is told to use `edit_file` or pick
+  another name.
+- `edit_file` replaces an _exact_ passage and refuses when that passage appears
+  more than once, naming the count, rather than guessing which one was meant.
+  Whole-file rewrites are not offered at all: a model rewriting a document from
+  memory silently drops the parts it did not think to repeat.
+
+**Search** is the read-only half of the same idea. `glob_files` finds files by
+name pattern and `grep_files` runs a regular expression over their contents,
+returning each hit as `file:line: text` — which `read_file` can then read
+around, since it takes `offset` and `limit` and numbers the lines it returns.
+Together they let a model work through a workspace of many files without
+reading all of them into the context window.
+
+`search_chats` has no shell equivalent and is the most useful of the three: it
+searches the user's own past messages, so "what did we decide about X" resolves
+against real history rather than being answered from nothing. Matching rows are
+prefiltered in SQL and then ranked with the same scorer retrieval uses, so a
+long history never loads into memory.
+
+A `grep_files` pattern is a user-supplied regular expression, which is worth one
+guard: patterns are capped at 200 characters, and an invalid one is reported
+back to the model rather than thrown. A catastrophically backtracking pattern is
+ended by the Worker's CPU limit, which fails that request and nothing else.
+
 **Fetching one page.** Independently of search, `POST /api/v1/retrieval/process/web`
 with `{"url": "..."}` fetches a page, reduces it to text, stores it as a file
 and indexes it for retrieval — which is what typing `#https://example.com` in

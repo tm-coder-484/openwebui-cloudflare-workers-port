@@ -141,6 +141,13 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'users.enable_status': true,
 
 	'chat.context_compaction.enable': false,
+	// Tools the model may call, beyond web search. Both act only on the calling
+	// user's own data, and only on providers that support tool calling.
+	'tools.memory.enable': true,
+	'tools.files.enable': true,
+	'tools.search.enable': true,
+	// Tool rounds per turn, clamped to 1-20 when read.
+	'tools.max_rounds': 3,
 	'chat.tool_permissions.enable': false,
 
 	'web.search.enable': false,
