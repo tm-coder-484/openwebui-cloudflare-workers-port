@@ -18,6 +18,7 @@ import {
 	TAGS_GENERATION_PROMPT,
 	TITLE_GENERATION_PROMPT,
 	extractJSON,
+	stripDetailBlocks,
 	stripThinking,
 	renderMessages
 } from './prompts';
@@ -315,6 +316,27 @@ function hasContent(message: CompletionMessage): boolean {
 	return Array.isArray(message.content) && message.content.length > 0;
 }
 
+/**
+ * A message with the chat screen's markup taken back out.
+ *
+ * Only the text half of a multi-part message is rewritten; an image part has
+ * no markup to strip and must survive untouched.
+ */
+function withoutDetailBlocks(message: CompletionMessage): CompletionMessage {
+	if (typeof message.content === 'string') {
+		return { ...message, content: stripDetailBlocks(message.content) };
+	}
+	if (!Array.isArray(message.content)) return message;
+	return {
+		...message,
+		content: message.content.map((part: any) =>
+			part?.type === 'text' && typeof part.text === 'string'
+				? { ...part, text: stripDetailBlocks(part.text) }
+				: part
+		)
+	};
+}
+
 /** Maps a stored chat message onto the OpenAI message shape, images included. */
 function toCompletionMessage(message: ChatMessage): CompletionMessage {
 	const images = ((message.files as any[]) ?? []).filter(
@@ -589,6 +611,14 @@ export async function runCompletion(
 			const history = await messagesFromChat(env, job.chatId, job.messageId);
 			job.body = { ...job.body, messages: [...requestMessages, ...history] };
 		}
+
+		// Past turns carry the markup the chat screen renders — a reasoning block,
+		// a tool call. Whichever way the history arrived, it is context now, and
+		// the model should be given what was said rather than how it was shown.
+		job.body = {
+			...job.body,
+			messages: (job.body.messages as CompletionMessage[]).map(withoutDetailBlocks)
+		};
 
 		// `always` searches once before the model runs; `tool` hands the search to
 		// the model as a function; `combo` does both, so it starts with pages in

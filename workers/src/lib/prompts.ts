@@ -64,6 +64,61 @@ Respond to the user query using the provided context.
 ### User Query:
 {{QUERY}}`;
 
+/**
+ * Turns a stored message back into context for the model.
+ *
+ * A message is stored with the markup the chat screen renders: a reasoning
+ * block, a tool-call block. That markup is for the reader, and sending it back
+ * costs three separate things — measured on a two-turn conversation with a
+ * reasoning model, 58-78% of every follow-up request was the previous turn's
+ * thinking, and it compounds with each turn:
+ *
+ *   - the context it fills, which is the model's to think in;
+ *   - the instruction it implies, since a model shown `<details
+ *     type="reasoning">` in its own past answers starts producing it;
+ *   - the summary it corrupts — a title generated from "the chat history"
+ *     was summarising the thinking rather than the answer.
+ *
+ * Reasoning and code-interpreter blocks are dropped. A tool-call block is
+ * replaced by its result, which the model does need: the markup goes, the
+ * output stays. This matches what the frontend does for the same reason, but
+ * it is done here so it holds for history loaded from the database as well as
+ * history a client sends, and cannot be skipped by a client that forgets.
+ */
+export function stripDetailBlocks(content: string): string {
+	if (!content || !content.includes('<details')) return content;
+
+	// The tool call's output is the useful half. Both shapes appear: the result
+	// in the body (what this port writes) and in a `result` attribute (older
+	// messages, and what upstream wrote before it moved).
+	let text = content.replace(
+		/<details\s+type="tool_calls"([^>]*)>([\s\S]*?)<\/details>/gi,
+		(_match, attributes: string, body: string) => {
+			const attribute = /\bresult="([^"]*)"/i.exec(attributes)?.[1];
+			if (attribute) return unescapeAttribute(attribute);
+			const afterSummary = /<summary>[\s\S]*?<\/summary>\s*([\s\S]*)$/i.exec(body);
+			return (afterSummary?.[1] ?? body).trim();
+		}
+	);
+
+	text = text.replace(
+		/<details\s+type="(reasoning|code_interpreter)"[^>]*>[\s\S]*?<\/details>/gi,
+		''
+	);
+
+	// The blocks were written with a blank line on each side; removing one
+	// leaves three newlines where the answer should simply start.
+	return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+const unescapeAttribute = (value: string): string =>
+	value
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'")
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&amp;/g, '&');
+
 /** Renders the `{{MESSAGES}}` placeholder from the tail of a conversation. */
 export function renderMessages(
 	messages: { role: string; content: unknown }[],
@@ -80,7 +135,10 @@ export function renderMessages(
 								.map((part) => (typeof part?.text === 'string' ? part.text : ''))
 								.join(' ')
 						: '';
-			return `${String(message.role).toUpperCase()}: ${content}`;
+			// The task prompts ask a model to summarise "the chat history". Left in,
+			// the previous turn's thinking is most of what they see, so a title
+			// described the reasoning rather than the answer.
+			return `${String(message.role).toUpperCase()}: ${stripDetailBlocks(content)}`;
 		})
 		.join('\n');
 }
