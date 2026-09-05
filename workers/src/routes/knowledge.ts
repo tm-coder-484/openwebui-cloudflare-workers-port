@@ -129,23 +129,58 @@ app.post('/create', async (c) => {
 	return c.json(await serialize(c, row!));
 });
 
+/**
+ * Both search endpoints answer `{items, total, page}`.
+ *
+ * A bare array is what they used to return, and the knowledge pickers do
+ * `res.items.map(...)` with no guard — so attaching knowledge from the composer
+ * threw "Cannot read properties of undefined (reading 'map')" and the panel
+ * never opened. The workspace screen survived only because it happens to write
+ * `res.items ?? []`, and its result count was silently always undefined.
+ */
+const PAGE_SIZE = 30;
+
+const paginate = <T>(items: T[], page: number) => ({
+	items: items.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+	total: items.length,
+	page
+});
+
 app.get('/search', async (c) => {
 	const rows = await visible(c);
 	const query = (c.req.query('query') ?? '').toLowerCase();
+	const page = Math.max(1, Number(c.req.query('page') ?? 1) || 1);
 	const matched = rows.filter(
 		(row) => row.name.toLowerCase().includes(query) || row.description.toLowerCase().includes(query)
 	);
-	return c.json(await Promise.all(matched.map((row) => serialize(c, row))));
+	const window = paginate(matched, page);
+	return c.json({
+		...window,
+		items: await Promise.all(window.items.map((row) => serialize(c, row)))
+	});
 });
 
+/**
+ * The *files* inside the visible knowledge bases — not retrieval chunks, which
+ * is what this returned before. The picker renders `item.filename` and
+ * `item.collection.name`, so a chunk gave it nothing to show even once the
+ * wrapper was right.
+ */
 app.get('/search/files', async (c) => {
-	const user = verifiedUser(c);
-	const query = c.req.query('query') ?? '';
+	verifiedUser(c);
+	const query = (c.req.query('query') ?? '').toLowerCase();
+	const page = Math.max(1, Number(c.req.query('page') ?? 1) || 1);
 	const knowledgeId = c.req.query('knowledge_id');
-	const results = await search(c.env, query, {
-		knowledgeIds: knowledgeId ? [knowledgeId] : (await visible(c)).map((row) => row.id)
-	});
-	return c.json(results);
+
+	const bases = (await visible(c)).filter((row) => !knowledgeId || row.id === knowledgeId);
+	const items: Record<string, unknown>[] = [];
+	for (const base of bases) {
+		for (const file of await filesFor(c, base.id)) {
+			if (query && !String(file.filename).toLowerCase().includes(query)) continue;
+			items.push({ ...file, collection: { id: base.id, name: base.name } });
+		}
+	}
+	return c.json(paginate(items, page));
 });
 
 async function load(c: any, id: string, permission: 'read' | 'write' = 'read') {

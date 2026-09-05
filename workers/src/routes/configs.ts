@@ -143,6 +143,44 @@ app.get('/subagents', async (c) => {
 	return c.json({ ENABLE_SUBAGENTS: false });
 });
 
+/**
+ * Tool settings.
+ *
+ * These had a default and no way to change it — no key map, no environment
+ * variable, no screen. Both routes exist so a deployment can turn a tool group
+ * off or lengthen a tool chain without a redeploy.
+ */
+const TOOL_KEYS: Record<string, string> = {
+	TOOLS_MAX_ROUNDS: 'tools.max_rounds',
+	ENABLE_MEMORY_TOOLS: 'tools.memory.enable',
+	ENABLE_FILE_TOOLS: 'tools.files.enable',
+	ENABLE_SEARCH_TOOLS: 'tools.search.enable',
+	ENABLE_TODO_TOOLS: 'tools.todo.enable',
+	ENABLE_KNOWLEDGE_TOOLS: 'tools.knowledge.enable'
+};
+
+app.get('/tools', async (c) => {
+	adminUser(c);
+	const config = await getConfigMany(c.env, Object.values(TOOL_KEYS));
+	const out: Record<string, unknown> = {};
+	for (const [field, key] of Object.entries(TOOL_KEYS)) out[field] = config[key] ?? null;
+	return c.json(out);
+});
+
+app.post('/tools', async (c) => {
+	adminUser(c);
+	const body = (await c.req.json()) as Record<string, unknown>;
+	const updates: Record<string, unknown> = {};
+	for (const [field, key] of Object.entries(TOOL_KEYS)) {
+		if (field in body) updates[key] = body[field];
+	}
+	await setConfigMany(c.env, updates);
+	const config = await getConfigMany(c.env, Object.values(TOOL_KEYS));
+	const out: Record<string, unknown> = {};
+	for (const [field, key] of Object.entries(TOOL_KEYS)) out[field] = config[key] ?? null;
+	return c.json(out);
+});
+
 app.get('/export', async (c) => {
 	adminUser(c);
 	return c.json(await exportConfig(c.env));

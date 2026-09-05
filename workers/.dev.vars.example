@@ -44,3 +44,11 @@ WEBUI_SECRET_KEY=change-me
 # picked per request and the others are tried if it is rate-limited.
 # OLLAMA_API_KEYS=key-one,key-two,key-three
 # OLLAMA_BASE_URL=https://ollama.com/v1
+
+# Tools the model may call, and how many rounds of them one turn allows.
+# TOOLS_MAX_ROUNDS=3
+# ENABLE_MEMORY_TOOLS=true
+# ENABLE_FILE_TOOLS=true
+# ENABLE_SEARCH_TOOLS=true
+# ENABLE_TODO_TOOLS=true
+# ENABLE_KNOWLEDGE_TOOLS=true

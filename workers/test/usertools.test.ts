@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { FILE_TOOLS, MEMORY_TOOLS, SEARCH_TOOLS, runToolCall, toolsFor } from '../src/lib/tools';
 import { globToRegExp } from '../src/lib/workspace';
 import { toolRounds } from '../src/lib/completions';
+import { normalizeTodos, renderTodos, todoSummary } from '../src/lib/todos';
+import { KNOWLEDGE_TOOLS } from '../src/lib/tools';
 
 /**
  * A D1 + R2 stub backed by plain arrays, enough for the memory and file tools.
@@ -11,6 +13,9 @@ import { toolRounds } from '../src/lib/completions';
 function fakeEnv() {
 	const memories: any[] = [];
 	const files: any[] = [];
+	const chats: any[] = [];
+	const knowledge: any[] = [];
+	const knowledgeFiles: any[] = [];
 
 	const run = (sql: string, args: any[]) => {
 		const s = sql.replace(/\s+/g, ' ').trim();
@@ -75,6 +80,36 @@ function fakeEnv() {
 			}
 			return [];
 		}
+		if (s.startsWith('SELECT id, role FROM user')) {
+			return [{ id: args[0], role: 'user' }];
+		}
+		if (s.includes('FROM knowledge') && s.includes('WHERE user_id = ? OR id IN')) {
+			// The stub grants nothing, so visibility is ownership.
+			return knowledge.filter((k) => k.user_id === args[0]);
+		}
+		if (s.includes('FROM file f') && s.includes('JOIN knowledge_file k')) {
+			const ids = new Set(args);
+			return knowledgeFiles
+				.filter((link) => ids.has(link.knowledge_id))
+				.map((link) => {
+					const file = files.find((f) => f.id === link.file_id);
+					return file ? { ...file, knowledge_id: link.knowledge_id } : null;
+				})
+				.filter(Boolean);
+		}
+		if (s.startsWith('INSERT INTO knowledge_file')) {
+			knowledgeFiles.push({ id: args[0], knowledge_id: args[1], file_id: args[2] });
+			return [];
+		}
+		if (s.includes('FROM access_grant') || s.includes('FROM group_member')) return [];
+		if (s.startsWith('SELECT * FROM chat WHERE id = ?1 AND user_id = ?2')) {
+			return chats.filter((c) => c.id === args[0] && c.user_id === args[1]);
+		}
+		if (s.startsWith('UPDATE chat SET meta')) {
+			const row = chats.find((c) => c.id === args[2] && c.user_id === args[3]);
+			if (row) row.meta = args[0];
+			return [];
+		}
 		if (s.startsWith('DELETE FROM file_chunk') || s.startsWith('INSERT INTO file_chunk')) return [];
 		return [];
 	};
@@ -94,6 +129,9 @@ function fakeEnv() {
 	return {
 		memories,
 		files,
+		chats,
+		knowledge,
+		knowledgeFiles,
 		env: {
 			DB: { prepare: statement, batch: async () => [] },
 			FILES: { put: async () => {}, get: async () => null }
@@ -460,5 +498,244 @@ describe('the tool round cap', () => {
 		expect(toolRounds(-5)).toBe(1);
 		expect(toolRounds(500)).toBe(20);
 		expect(toolRounds(3.9)).toBe(3);
+	});
+});
+
+describe('the plan', () => {
+	it('accepts what a model actually sends', () => {
+		// A model writing "done" or "doing" should not lose the item to a strict
+		// enum check; an item with no text is not a step.
+		expect(
+			normalizeTodos([
+				{ content: 'Read the file', status: 'completed' },
+				{ content: 'Edit it', status: 'doing' },
+				{ content: 'Check it', status: 'done' },
+				{ content: 'Ship', status: 'nonsense' },
+				{ content: '   ', status: 'pending' }
+			])
+		).toEqual([
+			{ content: 'Read the file', status: 'completed' },
+			{ content: 'Edit it', status: 'in_progress' },
+			{ content: 'Check it', status: 'completed' },
+			{ content: 'Ship', status: 'pending' }
+		]);
+	});
+
+	it('ignores anything that is not a list', () => {
+		expect(normalizeTodos(undefined)).toEqual([]);
+		expect(normalizeTodos('read the file')).toEqual([]);
+	});
+
+	it('caps a runaway list', () => {
+		expect(
+			normalizeTodos(Array.from({ length: 80 }, (_, i) => ({ content: `step ${i}` })))
+		).toHaveLength(50);
+	});
+
+	it('summarises progress with the step in flight, which is the useful part', () => {
+		expect(
+			todoSummary([
+				{ content: 'Read', status: 'completed' },
+				{ content: 'Edit the notes', status: 'in_progress' },
+				{ content: 'Check', status: 'pending' }
+			])
+		).toBe('1/3 — Edit the notes');
+		expect(todoSummary([{ content: 'Read', status: 'completed' }])).toBe('Plan updated (1/1)');
+		expect(todoSummary([])).toBe('Cleared the plan');
+	});
+
+	it('renders a checklist the model can read back', () => {
+		expect(
+			renderTodos([
+				{ content: 'Read', status: 'completed' },
+				{ content: 'Edit', status: 'in_progress' },
+				{ content: 'Check', status: 'pending' }
+			])
+		).toBe('[x] Read\n[~] Edit\n[ ] Check');
+	});
+});
+
+describe('plan tools', () => {
+	let fake: ReturnType<typeof fakeEnv>;
+	beforeEach(() => {
+		fake = fakeEnv();
+		fake.chats.push({ id: 'chat-1', user_id: 'u1', meta: '{}' });
+	});
+
+	const context = { userId: 'u1', chatId: 'chat-1' };
+
+	it('records a plan and reads it back', async () => {
+		await runToolCall(
+			fake.env,
+			call('todo_write', {
+				todos: [
+					{ content: 'Find the file', status: 'completed' },
+					{ content: 'Edit it', status: 'in_progress' }
+				]
+			}),
+			context
+		);
+		const out = await runToolCall(fake.env, call('todo_read', {}), context);
+		expect(out.content).toContain('[x] Find the file');
+		expect(out.content).toContain('[~] Edit it');
+		expect(out.status).toBe('1/2 — Edit it');
+	});
+
+	it('replaces the list rather than merging, as the description promises', async () => {
+		await runToolCall(
+			fake.env,
+			call('todo_write', { todos: [{ content: 'Old step', status: 'pending' }] }),
+			context
+		);
+		await runToolCall(
+			fake.env,
+			call('todo_write', { todos: [{ content: 'New step', status: 'pending' }] }),
+			context
+		);
+		const out = await runToolCall(fake.env, call('todo_read', {}), context);
+		expect(out.content).toContain('New step');
+		expect(out.content).not.toContain('Old step');
+	});
+
+	it('keeps the rest of the chat meta intact', async () => {
+		// meta is shared with tags and pinning; clobbering it would lose them.
+		fake.chats[0].meta = JSON.stringify({ tags: ['research'], pinned: true });
+		await runToolCall(
+			fake.env,
+			call('todo_write', { todos: [{ content: 'Step', status: 'pending' }] }),
+			context
+		);
+		const meta = JSON.parse(fake.chats[0].meta);
+		expect(meta.tags).toEqual(['research']);
+		expect(meta.pinned).toBe(true);
+		expect(meta.todos).toHaveLength(1);
+	});
+
+	it('says there is no plan yet rather than nothing', async () => {
+		const out = await runToolCall(fake.env, call('todo_read', {}), context);
+		expect(out.content).toMatch(/no plan has been recorded/i);
+	});
+
+	it('explains itself in a chat that is never saved', async () => {
+		const out = await runToolCall(fake.env, call('todo_read', {}), { userId: 'u1' });
+		expect(out.content).toMatch(/not a saved chat/i);
+	});
+
+	it('cannot read or write another user’s plan', async () => {
+		await runToolCall(
+			fake.env,
+			call('todo_write', { todos: [{ content: 'Private step', status: 'pending' }] }),
+			context
+		);
+		const read = await runToolCall(fake.env, call('todo_read', {}), {
+			userId: 'u2',
+			chatId: 'chat-1'
+		});
+		expect(read.content).not.toContain('Private step');
+		expect(read.content).toMatch(/not a saved chat/i);
+
+		const write = await runToolCall(
+			fake.env,
+			call('todo_write', { todos: [{ content: 'Hijacked', status: 'pending' }] }),
+			{ userId: 'u2', chatId: 'chat-1' }
+		);
+		expect(write.content).toMatch(/not a saved chat/i);
+		expect(JSON.parse(fake.chats[0].meta).todos[0].content).toBe('Private step');
+	});
+});
+
+describe('knowledge tools', () => {
+	let fake: ReturnType<typeof fakeEnv>;
+	beforeEach(async () => {
+		fake = fakeEnv();
+		fake.knowledge.push({ id: 'kb-1', user_id: 'u1', name: 'Research', description: 'papers' });
+		fake.knowledge.push({ id: 'kb-2', user_id: 'u2', name: 'Private', description: 'theirs' });
+	});
+
+	const asU1 = { userId: 'u1' };
+
+	it('lists only the bases the caller can see', async () => {
+		const out = await runToolCall(fake.env, call('list_knowledge', {}), asU1);
+		expect(out.content).toContain('Research');
+		expect(out.content).not.toContain('Private');
+	});
+
+	it('adds a created file to a base and then finds it there', async () => {
+		await runToolCall(
+			fake.env,
+			call('create_file', {
+				name: 'paper.md',
+				content: 'Edge computing notes',
+				knowledge: 'Research'
+			}),
+			asU1
+		);
+		expect(fake.knowledgeFiles).toHaveLength(1);
+
+		const listed = await runToolCall(fake.env, call('list_files', { knowledge: 'Research' }), asU1);
+		expect(listed.content).toContain('paper.md');
+	});
+
+	it('greps and globs inside a named base', async () => {
+		await runToolCall(
+			fake.env,
+			call('create_file', {
+				name: 'in-kb.md',
+				content: 'alpha\nNEEDLE here\nbravo',
+				knowledge: 'Research'
+			}),
+			asU1
+		);
+		await runToolCall(
+			fake.env,
+			call('create_file', { name: 'loose.md', content: 'NEEDLE here' }),
+			asU1
+		);
+
+		const grepped = await runToolCall(
+			fake.env,
+			call('grep_files', { pattern: 'NEEDLE', knowledge: 'Research' }),
+			asU1
+		);
+		expect(grepped.content).toContain('in-kb.md:2:');
+		expect(grepped.content).not.toContain('loose.md');
+
+		const globbed = await runToolCall(
+			fake.env,
+			call('glob_files', { pattern: '*.md', knowledge: 'Research' }),
+			asU1
+		);
+		expect(globbed.content).toContain('in-kb.md');
+		expect(globbed.content).not.toContain('loose.md');
+	});
+
+	it('reads a file that lives only in a knowledge base', async () => {
+		await runToolCall(
+			fake.env,
+			call('create_file', { name: 'kbonly.md', content: 'inside the base', knowledge: 'Research' }),
+			asU1
+		);
+		const out = await runToolCall(fake.env, call('read_file', { name: 'kbonly.md' }), asU1);
+		expect(out.content).toContain('inside the base');
+	});
+
+	it('refuses a base the caller cannot see, on every tool that takes one', async () => {
+		// The scoping resolver is the single boundary; this is what proves it.
+		for (const [name, args] of [
+			['list_files', { knowledge: 'Private' }],
+			['glob_files', { pattern: '*', knowledge: 'Private' }],
+			['grep_files', { pattern: 'a', knowledge: 'Private' }],
+			['read_file', { name: 'x.md', knowledge: 'Private' }],
+			['create_file', { name: 'x.md', content: 'x', knowledge: 'Private' }]
+		] as [string, Record<string, unknown>][]) {
+			const out = await runToolCall(fake.env, call(name, args), asU1);
+			expect(out.content).toMatch(/no knowledge base called Private/i);
+		}
+		expect(fake.knowledgeFiles).toHaveLength(0);
+	});
+
+	it('says so when a named base does not exist at all', async () => {
+		const out = await runToolCall(fake.env, call('list_files', { knowledge: 'Nonsense' }), asU1);
+		expect(out.content).toMatch(/no knowledge base called Nonsense/i);
 	});
 });

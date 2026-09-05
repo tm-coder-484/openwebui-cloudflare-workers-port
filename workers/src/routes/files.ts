@@ -134,13 +134,31 @@ app.get('/count', async (c) => {
 	return c.json({ count: row?.count ?? 0 });
 });
 
+/**
+ * Translates the shell-style pattern the picker sends into a SQL LIKE.
+ *
+ * The composer sends `*notes*` while you type and a bare `*` when the box is
+ * empty — never a plain substring. Interpolating that straight into `%...%`
+ * asked SQLite for a filename containing literal asterisks, so the file picker
+ * was empty every time, whatever the account held.
+ *
+ * A pattern with no wildcard is still treated as a substring, which is what an
+ * API caller passing a plain word expects.
+ */
+export function globToLike(pattern: string): string {
+	const escaped = pattern.replace(/[\\%_]/g, '\\$&');
+	if (!/[*?]/.test(pattern)) return `%${escaped}%`;
+	return escaped.replace(/\*/g, '%').replace(/\?/g, '_');
+}
+
 app.get('/search', async (c) => {
 	const user = verifiedUser(c);
 	const query = (c.req.query('filename') ?? c.req.query('query') ?? '').toLowerCase();
 	const { results } = await c.env.DB.prepare(
-		'SELECT * FROM file WHERE user_id = ?1 AND lower(filename) LIKE ?2 ORDER BY created_at DESC LIMIT 50'
+		`SELECT * FROM file WHERE user_id = ?1 AND lower(filename) LIKE ?2 ESCAPE '\\'
+		 ORDER BY created_at DESC LIMIT 50`
 	)
-		.bind(user.id, `%${query}%`)
+		.bind(user.id, globToLike(query))
 		.all<FileRow>();
 	return c.json((results ?? []).map(serialize));
 });

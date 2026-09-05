@@ -205,6 +205,11 @@ if (isAdmin || session.permissions?.workspace?.knowledge) {
 			body: JSON.stringify({ collection_names: [knowledge.id], query: 'edge javascript', k: 3 })
 		});
 		assert((search.documents?.[0] ?? []).length > 0, 'retrieval returned nothing');
+
+		// Tidy up after itself: without this every run left another knowledge base
+		// behind, and a machine that had run the suite thirty times had thirty of
+		// them cluttering the picker.
+		await api(`/api/v1/knowledge/${knowledge.id}/delete`, { method: 'DELETE' }).catch(() => {});
 	});
 }
 
@@ -474,7 +479,7 @@ if (models.data?.length) {
 if (models.data?.some((model) => model.id === 'mock-tools')) {
 	console.log('\nmemory & file tools');
 
-	const toolTurn = async (prompt) => {
+	const toolTurn = async (prompt, inChatId) => {
 		const socket = await connectSocket(token);
 		try {
 			socket.resetEvents();
@@ -486,6 +491,7 @@ if (models.data?.some((model) => model.id === 'mock-tools')) {
 					stream: true,
 					model: 'mock-tools',
 					messages: [{ role: 'user', content: prompt }],
+					...(inChatId ? { chat_id: inChatId } : {}),
 					id: messageId,
 					parent_id: null,
 					session_id: socket.sid,
@@ -500,7 +506,7 @@ if (models.data?.some((model) => model.id === 'mock-tools')) {
 				})
 			});
 			const content = await done;
-			return { content, statuses: [...socket.statuses] };
+			return { content, statuses: [...socket.statuses], sources: socket.sourceCount };
 		} finally {
 			socket.close();
 		}
@@ -564,6 +570,96 @@ if (models.data?.some((model) => model.id === 'mock-tools')) {
 			grepped.statuses.some((line) => /matches for bravo/.test(line)),
 			`no grep status: ${JSON.stringify(grepped.statuses)}`
 		);
+	});
+
+	await check('the model works with knowledge bases through the tools', async () => {
+		// A real base with a real file, driven end to end: list it, list its files,
+		// grep inside it, and search its contents for citable passages.
+		const kb = await api('/api/v1/knowledge/create', {
+			method: 'POST',
+			body: JSON.stringify({ name: 'Tool KB', description: 'for the tool checks' })
+		});
+		const form = new FormData();
+		form.append(
+			'file',
+			new Blob(['Cloudflare Workers run JavaScript at the edge in V8 isolates.'], {
+				type: 'text/plain'
+			}),
+			'kb-note.txt'
+		);
+		const uploaded = await fetch(`${BASE}/api/v1/files/`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}` },
+			body: form
+		}).then((r) => r.json());
+		await api(`/api/v1/knowledge/${kb.id}/file/add`, {
+			method: 'POST',
+			body: JSON.stringify({ file_id: uploaded.id })
+		});
+		await new Promise((resolve) => setTimeout(resolve, 1200));
+
+		const listed = await toolTurn('TOOLTEST:kblist');
+		assert(
+			listed.statuses.some((line) => /Listed \d+ knowledge bases/.test(line)),
+			`list_knowledge did not run: ${JSON.stringify(listed.statuses)}`
+		);
+
+		const files = await toolTurn('TOOLTEST:kbfiles Tool KB');
+		assert(
+			files.statuses.some((line) => /files in Tool KB/i.test(line)),
+			`list_files did not scope to the base: ${JSON.stringify(files.statuses)}`
+		);
+
+		const grepped = await toolTurn('TOOLTEST:kbgrep Tool KB');
+		assert(
+			grepped.statuses.some((line) => /matches for Cloudflare in Tool KB/i.test(line)),
+			`grep did not scope to the base: ${JSON.stringify(grepped.statuses)}`
+		);
+
+		const searched = await toolTurn('TOOLTEST:kbsearch edge isolates');
+		assert(
+			searched.statuses.some((line) => /Searched knowledge for/.test(line)),
+			`search_knowledge did not run: ${JSON.stringify(searched.statuses)}`
+		);
+		assert(
+			searched.sources > 0,
+			`knowledge search returned no citable sources; statuses: ${JSON.stringify(searched.statuses)}`
+		);
+
+		await api(`/api/v1/knowledge/${kb.id}/delete`, { method: 'DELETE' }).catch(() => {});
+		await api(`/api/v1/files/${uploaded.id}`, { method: 'DELETE' }).catch(() => {});
+	});
+
+	await check('the model records a plan, and it survives into the next turn', async () => {
+		// The plan is kept against the chat row, so a second turn in the same chat
+		// must find it — that persistence is the whole point of the tool.
+		const chat = await api('/api/v1/chats/new', {
+			method: 'POST',
+			body: JSON.stringify({
+				chat: {
+					title: 'Plan chat',
+					models: ['mock-tools'],
+					history: { currentId: null, messages: {} }
+				}
+			})
+		});
+
+		const written = await toolTurn('TOOLTEST:plan', chat.id);
+		assert(
+			written.statuses.some((line) => line.includes('Edit them')),
+			`the plan status did not name the step in flight: ${JSON.stringify(written.statuses)}`
+		);
+
+		const stored = await api(`/api/v1/chats/${chat.id}`);
+		assert(stored.meta?.todos?.length === 3, 'the plan did not reach the chat row');
+
+		const read = await toolTurn('TOOLTEST:planread', chat.id);
+		assert(
+			read.statuses.some((line) => line.startsWith('1/3')),
+			`a later turn could not read the plan back: ${JSON.stringify(read.statuses)}`
+		);
+
+		await api(`/api/v1/chats/${chat.id}`, { method: 'DELETE' }).catch(() => {});
 	});
 
 	await check('the model searches earlier conversations', async () => {
@@ -636,6 +732,65 @@ if (isAdmin) {
 			}
 		});
 	}
+
+	await check('the knowledge pickers get {items,total,page}, not a bare array', async () => {
+		// The composer's knowledge picker does `res.items.map(...)` with no guard,
+		// so a bare array threw and the panel never opened.
+		for (const path of [
+			'/api/v1/knowledge/search?page=1',
+			'/api/v1/knowledge/search/files?page=1'
+		]) {
+			const body = await api(path);
+			assert(!Array.isArray(body), `${path} still answers with a bare array`);
+			assert(Array.isArray(body.items), `${path} has no items array`);
+			assert(typeof body.total === 'number', `${path} reports no total`);
+		}
+	});
+
+	await check('knowledge file search returns files, not retrieval chunks', async () => {
+		const body = await api('/api/v1/knowledge/search/files?page=1');
+		for (const item of body.items) {
+			// The picker renders item.filename and item.collection.name; a chunk has
+			// neither, so the panel would open on an unusable list.
+			assert(typeof item.filename === 'string', 'an item has no filename');
+			assert(item.collection?.name, 'an item names no knowledge base');
+		}
+	});
+
+	await check('the file picker finds files with the pattern the UI sends', async () => {
+		// The composer sends `*name*` while you type and `*` when the box is empty.
+		// Taking that literally made the picker empty whatever the account held.
+		const all = await api('/api/v1/files/');
+		if (all.length) {
+			const globbed = await api('/api/v1/files/search?filename=*');
+			assert(globbed.length > 0, 'a bare * matched nothing despite the account having files');
+
+			const name = all[0].filename.slice(0, 4);
+			const narrowed = await api(
+				`/api/v1/files/search?filename=${encodeURIComponent(`*${name}*`)}`
+			);
+			assert(narrowed.length > 0, `*${name}* matched nothing`);
+		}
+	});
+
+	await check('the tool settings can actually be changed', async () => {
+		// They shipped with a default and no way to set it — no key map, no
+		// environment variable, no screen.
+		const saved = await api('/api/v1/configs/tools', {
+			method: 'POST',
+			body: JSON.stringify({ TOOLS_MAX_ROUNDS: 7, ENABLE_FILE_TOOLS: false })
+		});
+		assert(saved.TOOLS_MAX_ROUNDS === 7, 'the round cap was not saved');
+		assert(saved.ENABLE_FILE_TOOLS === false, 'the file-tools switch was not saved');
+
+		const reloaded = await api('/api/v1/configs/tools');
+		assert(reloaded.TOOLS_MAX_ROUNDS === 7, 'the round cap did not persist');
+
+		await api('/api/v1/configs/tools', {
+			method: 'POST',
+			body: JSON.stringify({ TOOLS_MAX_ROUNDS: 3, ENABLE_FILE_TOOLS: true })
+		});
+	});
 
 	await check('the ComfyUI node lists are arrays, not just present', async () => {
 		// `config.COMFYUI_WORKFLOW_NODES.find(...)` runs whatever the engine is.

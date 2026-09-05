@@ -574,11 +574,13 @@ them is scoped to the id of the account whose turn it is, so a model naming
 another user's file gets "not found" — and none is a shell: there is no
 filesystem and no command execution anywhere in this port.
 
-| Group  | Tools                                                 | Config key            |
-| ------ | ----------------------------------------------------- | --------------------- |
-| Memory | `remember`, `recall`, `forget`                        | `tools.memory.enable` |
-| Files  | `list_files`, `read_file`, `create_file`, `edit_file` | `tools.files.enable`  |
-| Search | `glob_files`, `grep_files`, `search_chats`            | `tools.search.enable` |
+| Group     | Tools                                                 | Config key               |
+| --------- | ----------------------------------------------------- | ------------------------ |
+| Memory    | `remember`, `recall`, `forget`                        | `tools.memory.enable`    |
+| Files     | `list_files`, `read_file`, `create_file`, `edit_file` | `tools.files.enable`     |
+| Search    | `glob_files`, `grep_files`, `search_chats`            | `tools.search.enable`    |
+| Plan      | `todo_write`, `todo_read`                             | `tools.todo.enable`      |
+| Knowledge | `list_knowledge`, `search_knowledge`                  | `tools.knowledge.enable` |
 
 A turn allows **three rounds of tool calls** before the model has to answer —
 enough for search, read a result, search again. Raise it with `tools.max_rounds`
@@ -587,10 +589,28 @@ and edit are four rounds on their own. The value is clamped to 1-20 rather than
 trusted: a round is a whole model call plus its tool work, so an unbounded value
 is a turn that never ends and a bill to match.
 
-All default to on, and are switched through the config API
-(`POST /api/v1/configs/...`) rather than a settings screen. They do **not**
-require web search to be enabled for the turn — the search mode governs the
-search tools only.
+All default to on. There is no settings screen for them, so they are set either
+as **Worker variables** (Settings → Variables and Secrets) or through the config
+API — the variable seeds the value on first read, the API changes it at runtime
+without a redeploy:
+
+| Variable                 | Config key               | Value           |
+| ------------------------ | ------------------------ | --------------- |
+| `TOOLS_MAX_ROUNDS`       | `tools.max_rounds`       | 1-20, default 3 |
+| `ENABLE_MEMORY_TOOLS`    | `tools.memory.enable`    | true / false    |
+| `ENABLE_FILE_TOOLS`      | `tools.files.enable`     | true / false    |
+| `ENABLE_SEARCH_TOOLS`    | `tools.search.enable`    | true / false    |
+| `ENABLE_TODO_TOOLS`      | `tools.todo.enable`      | true / false    |
+| `ENABLE_KNOWLEDGE_TOOLS` | `tools.knowledge.enable` | true / false    |
+
+```bash
+curl -X POST "$WEBUI/api/v1/configs/tools" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"TOOLS_MAX_ROUNDS": 8, "ENABLE_FILE_TOOLS": false}'
+```
+
+None of these groups require web search to be enabled for the turn — the search
+mode governs the search tools only.
 
 **Memory** makes the existing per-user memories something the model reaches for
 rather than something injected: it saves a fact when the user tells it one, and
@@ -623,6 +643,42 @@ searches the user's own past messages, so "what did we decide about X" resolves
 against real history rather than being answered from nothing. Matching rows are
 prefiltered in SQL and then ranked with the same scorer retrieval uses, so a
 long history never loads into memory.
+
+**Plan** is what makes a long chain legible. `todo_write` records the steps for
+a job that takes several, marking one `in_progress` at a time, and the status
+strip shows progress and the step in flight — `2/5 — Edit the notes` — so a turn
+that runs for a while is something you can watch rather than a blank pause.
+`todo_read` brings it back, and because the plan lives on the chat row it
+survives between messages: a follow-up tomorrow picks up where it left off.
+
+The list is replaced wholesale on every write rather than patched item by item.
+That is deliberate — a model that has to restate the whole plan cannot let it
+drift — and it is what the tool description promises, so a partial write loses
+whatever was left out.
+
+Two things follow from where it is stored. A plan needs a **saved chat**: a
+temporary chat has no row to keep it on, and the tool says so rather than
+failing the turn. And `chat.meta` is read-modify-written, shared with tags and
+pinning, so two turns running at once in the _same_ chat could overwrite each
+other's list — sequential tool calls within one turn are safe.
+
+**Knowledge** connects the rest to collections rather than loose files.
+`list_knowledge` names the bases and their file counts; `search_knowledge`
+searches their contents and returns matching passages as citable sources, which
+is the right tool for "what do my documents say about X".
+
+The file and search tools also take an optional `knowledge` argument, so
+`list_files`, `glob_files` and `grep_files` can work inside one base, `read_file`
+finds a file that lives only in a collection, and `create_file` can put what it
+writes straight into one. Without the argument they act on the user's own loose
+files, as before.
+
+Access is the part that matters. A knowledge base can be shared, by user or by
+group, for reading or for writing — so every one of those tools resolves the
+argument through the same visibility rule and `hasAccess` check the HTTP routes
+use, in **one** place rather than per tool. Naming a base you cannot see is
+refused identically whichever tool you name it on, and `create_file` additionally
+requires write access to the base, not merely sight of it.
 
 A `grep_files` pattern is a user-supplied regular expression, which is worth one
 guard: patterns are capped at 200 characters, and an invalid one is reported

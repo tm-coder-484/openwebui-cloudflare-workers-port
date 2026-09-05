@@ -110,14 +110,48 @@ export async function grepFiles(
 		};
 	}
 
+	const rows = (await userFileRows(env, userId)).map((row) => ({
+		filename: row.filename,
+		content: contentOf(row)
+	}));
+	return grepIn(rows, pattern, options);
+}
+
+/**
+ * The matching itself, over files already loaded.
+ *
+ * Shared by the workspace path and the knowledge path so the two cannot drift —
+ * the cap, the line numbering and the truncation are defined once.
+ */
+export function grepIn(
+	files: { filename: string; content: string }[],
+	pattern: string,
+	options: { glob?: string; ignoreCase?: boolean } = {}
+): { hits: GrepHit[]; filesSearched: number; error?: string } {
+	if (pattern.length > MAX_PATTERN) {
+		return {
+			hits: [],
+			filesSearched: 0,
+			error: `The pattern is longer than ${MAX_PATTERN} characters.`
+		};
+	}
+	let matcher: RegExp;
+	try {
+		matcher = new RegExp(pattern, options.ignoreCase === false ? '' : 'i');
+	} catch (error) {
+		return {
+			hits: [],
+			filesSearched: 0,
+			error: `Not a valid regular expression: ${(error as Error).message}`
+		};
+	}
+
 	const nameFilter = options.glob ? globToRegExp(options.glob) : null;
-	const rows = (await userFileRows(env, userId)).filter(
-		(row) => !nameFilter || nameFilter.test(row.filename)
-	);
+	const rows = files.filter((file) => !nameFilter || nameFilter.test(file.filename));
 
 	const hits: GrepHit[] = [];
 	for (const row of rows) {
-		const lines = contentOf(row).split('\n');
+		const lines = row.content.split('\n');
 		for (let index = 0; index < lines.length; index += 1) {
 			if (!matcher.test(lines[index])) continue;
 			hits.push({ filename: row.filename, line: index + 1, text: lines[index].slice(0, 300) });

@@ -132,6 +132,20 @@ createServer(async (req, res) => {
 			if (kind === 'glob') return one('glob_files', { pattern: '*.md' });
 			if (kind === 'grep') return one('grep_files', { pattern: 'bravo' });
 			if (kind === 'history') return one('search_chats', { query: rest || 'durable objects' });
+			if (kind === 'plan')
+				return one('todo_write', {
+					todos: [
+						{ content: 'Find the notes', status: 'completed' },
+						{ content: 'Edit them', status: 'in_progress' },
+						{ content: 'Check the result', status: 'pending' }
+					]
+				});
+			if (kind === 'planread') return one('todo_read', {});
+			if (kind === 'kblist') return one('list_knowledge', {});
+			if (kind === 'kbsearch') return one('search_knowledge', { query: rest || 'edge javascript' });
+			if (kind === 'kbfiles') return one('list_files', { knowledge: rest || 'Tool KB' });
+			if (kind === 'kbgrep')
+				return one('grep_files', { pattern: 'Cloudflare', knowledge: rest || 'Tool KB' });
 			return [
 				{
 					index: 0,

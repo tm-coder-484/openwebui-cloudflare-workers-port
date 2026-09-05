@@ -146,6 +146,8 @@ export const DEFAULT_CONFIG: Record<string, unknown> = {
 	'tools.memory.enable': true,
 	'tools.files.enable': true,
 	'tools.search.enable': true,
+	'tools.todo.enable': true,
+	'tools.knowledge.enable': true,
 	// Tool rounds per turn, clamped to 1-20 when read.
 	'tools.max_rounds': 3,
 	'chat.tool_permissions.enable': false,
@@ -285,6 +287,18 @@ function envDefaults(env: Env): Record<string, unknown> {
 	if (env.JWT_EXPIRES_IN) seeded['auth.jwt_expiry'] = env.JWT_EXPIRES_IN;
 	if (env.RAG_EMBEDDING_MODEL) seeded['rag.embedding_model'] = env.RAG_EMBEDDING_MODEL;
 	if (env.TASK_MODEL) seeded['task.model'] = env.TASK_MODEL;
+
+	if (env.TOOLS_MAX_ROUNDS) seeded['tools.max_rounds'] = Number(env.TOOLS_MAX_ROUNDS);
+	if (env.ENABLE_MEMORY_TOOLS !== undefined)
+		seeded['tools.memory.enable'] = toBool(env.ENABLE_MEMORY_TOOLS);
+	if (env.ENABLE_FILE_TOOLS !== undefined)
+		seeded['tools.files.enable'] = toBool(env.ENABLE_FILE_TOOLS);
+	if (env.ENABLE_SEARCH_TOOLS !== undefined)
+		seeded['tools.search.enable'] = toBool(env.ENABLE_SEARCH_TOOLS);
+	if (env.ENABLE_TODO_TOOLS !== undefined)
+		seeded['tools.todo.enable'] = toBool(env.ENABLE_TODO_TOOLS);
+	if (env.ENABLE_KNOWLEDGE_TOOLS !== undefined)
+		seeded['tools.knowledge.enable'] = toBool(env.ENABLE_KNOWLEDGE_TOOLS);
 
 	if (env.ENABLE_NVIDIA_API !== undefined) seeded['nvidia.enable'] = toBool(env.ENABLE_NVIDIA_API);
 	if (env.NVIDIA_API_KEY) seeded['nvidia.api_key'] = env.NVIDIA_API_KEY;
