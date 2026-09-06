@@ -116,6 +116,15 @@
 		if (res) {
 			webConfig = res.web;
 
+			// `tool` and `combo` used to differ: `tool` handed the model the search
+			// tools and left it to decide, while the switch searched first only in
+			// the other modes. The switch now always searches first, so the two are
+			// the same thing and only one is offered — an existing `tool` setting
+			// is shown as what it now does rather than as a blank select.
+			if (webConfig?.WEB_SEARCH_MODE === 'tool') {
+				webConfig.WEB_SEARCH_MODE = 'combo';
+			}
+
 			// Convert array back to comma-separated string for display
 			if (Array.isArray(webConfig?.WEB_SEARCH_DOMAIN_FILTER_LIST)) {
 				webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST = webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST.join(',');
@@ -222,28 +231,33 @@
 
 				<AdminSettingRow
 					label={$i18n.t('Search Mode')}
-					description={$i18n.t('Search before every turn, or let the model decide when to search.')}
+					description={$i18n.t(
+						'What turning Web Search on in a chat does. It always searches before the reply; this decides whether the model also gets the tools to search again.'
+					)}
 				>
 					<SettingsSelect bind:value={webConfig.WEB_SEARCH_MODE} placeholder={$i18n.t('Always')}>
-						<option value="always">{$i18n.t('Always search')}</option>
-						<option value="tool">{$i18n.t('Model decides (tool calling)')}</option>
-						<option value="combo">{$i18n.t('Both: search first, model can search again')}</option>
+						<option value="always">{$i18n.t('Search once, before the reply')}</option>
+						<option value="combo">{$i18n.t('Search first, and let the model search again')}</option>
 					</SettingsSelect>
 				</AdminSettingRow>
 
-				{#if webConfig.WEB_SEARCH_MODE === 'tool'}
+				{#if webConfig.WEB_SEARCH_MODE === 'tool' || webConfig.WEB_SEARCH_MODE === 'combo'}
 					<div class="mb-2.5 text-xs text-gray-500 dark:text-gray-400">
 						{$i18n.t(
-							'The model is given web_search and web_fetch as tools and calls them when it judges a search is needed, up to three rounds. Needs a model that supports tool calling; if it does not, the turn falls back to searching first.'
-						)}
-					</div>
-				{:else if webConfig.WEB_SEARCH_MODE === 'combo'}
-					<div class="mb-2.5 text-xs text-gray-500 dark:text-gray-400">
-						{$i18n.t(
-							'One search runs before the turn, and the model keeps the tools — so it answers straight away when those results cover the question, and searches again when they do not. Costs one search per turn, like Always.'
+							'One search runs before the turn, and the model keeps web_search and web_fetch — so it answers straight away when those results cover the question, and searches again when they do not. Needs a model that supports tool calling; if it does not, the turn just searches first.'
 						)}
 					</div>
 				{/if}
+
+				<AdminSettingRow
+					label={$i18n.t('Always give the model search tools')}
+					description={$i18n.t(
+						'The model can search the web on any turn, without the reader turning Web Search on. The switch in a chat still forces a search before the reply.'
+					)}
+					let:labelId
+				>
+					<Switch bind:state={webConfig.WEB_SEARCH_TOOL_ALWAYS} ariaLabelledbyId={labelId} />
+				</AdminSettingRow>
 
 				{#if webConfig.WEB_SEARCH_ENGINE !== ''}
 					{#if webConfig.WEB_SEARCH_ENGINE === 'ollama_cloud'}

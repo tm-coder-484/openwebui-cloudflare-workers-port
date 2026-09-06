@@ -271,12 +271,24 @@ export interface SearchPlan {
  * no tool-calling shape — so a mode that asked for tools without them falls back
  * to searching first rather than doing nothing.
  */
-export function searchPlan(mode: string, enabled: boolean, canUseTools: boolean): SearchPlan {
-	if (!enabled) return { preSearch: false, tools: false };
+export function searchPlan(
+	mode: string,
+	enabled: boolean,
+	canUseTools: boolean,
+	toolAlways = false
+): SearchPlan {
+	// With `tool_always` set the model carries the search tools on every turn,
+	// switch or no switch: searching becomes something it can reach for rather
+	// than something the reader has to predict they will need.
+	const ambient = toolAlways && canUseTools;
+	if (!enabled) return { preSearch: false, tools: ambient };
 
+	// The switch means "search before answering", in every mode. It used to mean
+	// different things in each — in `tool` mode it only handed over the tools and
+	// left the model to decide, so turning it on for a question that plainly
+	// needed the web often searched nothing at all.
 	const wantsTools = mode === 'tool' || mode === 'combo';
-	const tools = wantsTools && canUseTools;
-	return { preSearch: !tools || mode === 'combo', tools };
+	return { preSearch: true, tools: ambient || (wantsTools && canUseTools) };
 }
 
 export const MEMORY_TOOLS = [
