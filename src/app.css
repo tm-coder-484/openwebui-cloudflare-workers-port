@@ -17,6 +17,22 @@
 	--app-text-scale: 1;
 }
 
+/*
+ * Clearance for a phone's home indicator.
+ *
+ * `app.html` sets `viewport-fit=cover`, which opts the page in to drawing
+ * underneath the rounded corners and the home indicator. That is only correct
+ * if the layout pads for them, and nothing did — so in an installed app the
+ * composer's control row, the one carrying the attach and tools menus, sat
+ * behind the indicator.
+ *
+ * `env()` resolves to zero in a browser tab and on the desktop, so this changes
+ * nothing outside a standalone app on a device that has an inset.
+ */
+.pb-safe {
+	padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
 html {
 	word-break: break-word;
 	/* font-size scales the entire document via the same UI control */

@@ -19,7 +19,12 @@ run_worker_first = [
   "/ws/*",
   "/oauth/*",
   "/health*",
-  "/cache/*"
+  "/cache/*",
+  # The built bundle ships an empty placeholder for this, because upstream
+  # serves it from its backend with the deployment's own name in it. Without
+  # this line the placeholder wins and an installed app has no name, no icons
+  # and no standalone display.
+  "/manifest.json"
 ]
 
 # Runs scheduled automations. Cloudflare's minimum granularity is one minute.

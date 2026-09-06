@@ -4420,7 +4420,7 @@
 							{:else}
 								<div
 									id={embedded ? messageInputDropzoneId : undefined}
-									class=" pb-2 {dragged ? 'z-0' : 'z-10'}"
+									class=" pb-safe {dragged ? 'z-0' : 'z-10'}"
 								>
 									<MessageInput
 										bind:this={messageInput}
@@ -4513,7 +4513,7 @@
 										</div>
 									</div>
 								{/if}
-								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
+								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-safe z-10">
 									<MessageInput
 										bind:this={messageInput}
 										{history}
