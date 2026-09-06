@@ -46,6 +46,15 @@ import { HttpError, now, toJSON } from './util';
  * Clamped rather than trusted: a round is a whole model call plus its tool
  * work, so an unbounded value is a turn that never ends and a bill to match.
  */
+/**
+ * How many times a broken stream is picked up again before the turn gives up.
+ *
+ * Two covers a provider dropping a connection, which is what this is for. A
+ * higher number mostly buys repeated failure against an endpoint that is down,
+ * and every attempt is charged for the prompt again.
+ */
+const RESUME_ATTEMPTS = 2;
+
 const DEFAULT_TOOL_ROUNDS = 3;
 const MAX_TOOL_ROUNDS_LIMIT = 20;
 
@@ -830,6 +839,115 @@ export async function runCompletion(
 				await emitMessage();
 			};
 
+			/**
+			 * The request to send for one attempt.
+			 *
+			 * The first is the round's own request. A later one carries the answer
+			 * so far as a trailing assistant message, which is what makes the model
+			 * continue rather than start again.
+			 */
+			const buildResumed = (roundRequest: UpstreamRequest, attempt: number): UpstreamRequest => {
+				if (attempt === 0) return roundRequest;
+				const written = stripDetailBlocks(content).trim();
+				if (!written) return roundRequest;
+				return {
+					...roundRequest,
+					payload: {
+						...roundRequest.payload,
+						messages: [
+							...(roundRequest.payload.messages as CompletionMessage[]),
+							{ role: 'assistant', content: written }
+						]
+					}
+				};
+			};
+
+			/**
+			 * Reads one model turn, picking up where it stopped if the stream dies.
+			 *
+			 * A provider hiccup partway through an answer used to end the turn: the
+			 * message was left truncated mid-sentence with "Network connection
+			 * lost." against it, and the reader's only recourse was to regenerate
+			 * from nothing — paying again for the part they already had.
+			 *
+			 * When the break comes after the model has written something, the
+			 * request goes back with that text as a trailing assistant message,
+			 * which an OpenAI-compatible endpoint continues rather than restarts.
+			 * When it comes before anything was written there is nothing to
+			 * continue, so the same request is simply sent again.
+			 *
+			 * What goes back is the answer with the chat screen's markup taken out,
+			 * for the same reason no other history carries it: a model shown
+			 * `<details type="reasoning">` writes more of it. A break during the
+			 * thinking therefore leaves nothing to continue from, and starts over.
+			 *
+			 * An error before the first chunk of the first attempt is passed
+			 * through untouched, so a model that rejects `tools` still falls back
+			 * to searching before the turn rather than being retried into the same
+			 * refusal.
+			 */
+			const streamRound = async (
+				roundRequest: UpstreamRequest,
+				pending: ReturnType<typeof toolCallAccumulator>
+			): Promise<void> => {
+				for (let attempt = 0; ; attempt += 1) {
+					try {
+						for await (const chunk of streamUpstream(env, buildResumed(roundRequest, attempt))) {
+							if (signal?.aborted) break;
+							if (chunk.usage) usage = chunk.usage;
+							if (chunk.toolCalls) pending.push(chunk.toolCalls);
+							if (chunk.reasoning) {
+								const opening = !reasoning.open;
+								await pushDelta(reasoning.push(chunk.reasoning), opening);
+							}
+							if (chunk.content) {
+								await closeReasoning();
+								await pushDelta(chunk.content);
+							}
+						}
+						return;
+					} catch (error) {
+						const message = String((error as Error)?.message ?? error);
+						// A refused request will be refused again. `streamUpstream`
+						// raises an HttpError for a status it did not like, and
+						// anything below 500 is the request's fault — the wrong model,
+						// a bad key, a body the endpoint will not take. A dropped
+						// connection arrives as an ordinary Error with no status, and
+						// that is the one worth trying again. 429 and 5xx have already
+						// had their retries inside `fetchWithKeyFallback`.
+						const status = error instanceof HttpError ? error.status : 0;
+						const refused = status >= 400;
+						const fatal =
+							signal?.aborted ||
+							attempt >= RESUME_ATTEMPTS ||
+							refused ||
+							// The tools fallback owns this one, and it reaches here as a
+							// 400 in any case.
+							isToolsUnsupported(message);
+						if (fatal) throw error;
+
+						console.warn(
+							`[open-webui] stream broke after ${content.length} characters, ` +
+								`resuming (attempt ${attempt + 1}): ${message}`
+						);
+						await emit({
+							chat_id: job.chatId,
+							message_id: job.messageId,
+							data: {
+								type: 'status',
+								data: {
+									action: 'resume',
+									description: content
+										? 'The connection dropped; picking up where it stopped'
+										: 'The connection dropped; trying again',
+									done: false
+								}
+							}
+						});
+					}
+				}
+			};
+
 			// Each round is one model turn. A turn that ends in tool calls is run,
 			// its results appended, and the model asked again; a turn that produces
 			// only text ends the loop. The cap stops a model that keeps calling the
@@ -847,19 +965,7 @@ export async function runCompletion(
 
 				const pending = toolCallAccumulator();
 				try {
-					for await (const chunk of streamUpstream(env, roundRequest)) {
-						if (signal?.aborted) break;
-						if (chunk.usage) usage = chunk.usage;
-						if (chunk.toolCalls) pending.push(chunk.toolCalls);
-						if (chunk.reasoning) {
-							const opening = !reasoning.open;
-							await pushDelta(reasoning.push(chunk.reasoning), opening);
-						}
-						if (chunk.content) {
-							await closeReasoning();
-							await pushDelta(chunk.content);
-						}
-					}
+					await streamRound(roundRequest, pending);
 				} catch (error) {
 					// Not every model accepts `tools`. Rather than failing the message,
 					// drop back to the mode that needs nothing of the model: search
