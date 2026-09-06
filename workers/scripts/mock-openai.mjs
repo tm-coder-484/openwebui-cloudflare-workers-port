@@ -18,7 +18,25 @@ const PORT = Number(process.env.MOCK_OPENAI_PORT ?? 11435);
 // matters and when a fast one is too quick to observe.
 const TOKEN_DELAY = Number(process.env.MOCK_OPENAI_DELAY ?? 20);
 let busyOnceServed = false;
-const MODELS = ['mock-gpt', 'mock-gpt-mini', 'mock-reasoner', 'mock-tools', 'mock-no-tools'];
+const MODELS = [
+	'mock-gpt',
+	'mock-gpt-mini',
+	'mock-reasoner',
+	'mock-tools',
+	'mock-no-tools',
+	'mock-flaky'
+];
+
+// `mock-flaky` drops the connection partway through its first answer, the way a
+// provider hiccup looks from the Worker, and continues a trailing assistant
+// message the way a real endpoint does. Together those let a test see whether a
+// broken turn was picked up where it stopped or started again — a resume that
+// restarts shows up as a duplicated opening.
+const FLAKY_BREAK_AFTER = 5;
+let flakyBroken = 0;
+const resetFlaky = () => {
+	flakyBroken = 0;
+};
 
 const readBody = (req) =>
 	new Promise((resolve) => {
@@ -65,6 +83,7 @@ createServer(async (req, res) => {
 
 	if (url.pathname.endsWith('/__reset-requests')) {
 		recentRequests.length = 0;
+		resetFlaky();
 		res.writeHead(200, { 'Content-Type': 'application/json' });
 		res.end('{"ok":true}');
 		return;
@@ -310,8 +329,30 @@ createServer(async (req, res) => {
 			Connection: 'keep-alive'
 		});
 		const words = content.split(' ');
+		// A trailing assistant message is a prefill: carry on from the end of it
+		// rather than repeating what is already there.
+		const lastMessage = (body.messages ?? []).at(-1);
+		const prefill =
+			body.model === 'mock-flaky' && lastMessage?.role === 'assistant'
+				? String(lastMessage.content ?? '')
+				: '';
 		let index = 0;
+		if (prefill) {
+			while (index < words.length && words.slice(0, index + 1).join(' ').length <= prefill.length) {
+				index += 1;
+			}
+		}
+		// Break the first answer, and only one that has nothing to continue from,
+		// so the resumed attempt gets through and the whole answer can be compared.
+		const willBreak = body.model === 'mock-flaky' && !prefill && flakyBroken < 1;
+		if (willBreak) flakyBroken += 1;
+		let sent = 0;
+
 		const timer = setInterval(() => {
+			if (willBreak && sent >= FLAKY_BREAK_AFTER) {
+				clearInterval(timer);
+				return res.destroy();
+			}
 			if (index >= words.length) {
 				clearInterval(timer);
 				res.write(
@@ -334,6 +375,7 @@ createServer(async (req, res) => {
 			// the end of the previous line instead of starting its own.
 			const thinking = body.model === 'mock-reasoner' && (index < 3 || (index >= 6 && index < 8));
 			const token = (index ? ' ' : '') + words[index];
+			sent += 1;
 			res.write(
 				`data: ${JSON.stringify({
 					id: 'mock-1',

@@ -922,13 +922,85 @@ if (models.data?.some((model) => model.id === 'mock-reasoner')) {
 		}
 	});
 
+	if (models.data?.some((model) => model.id === 'mock-flaky')) {
+		await check('a broken stream is picked up where it stopped', async () => {
+			// A provider hiccup partway through used to end the turn: the message
+			// was left truncated with "Network connection lost." against it, and
+			// the only recourse was to regenerate from nothing.
+			await fetch(`${MOCK_BASE}/__reset-requests`).catch(() => {});
+			const chat = await newChat();
+			const socket = await connectSocket(token);
+			try {
+				const messageId = crypto.randomUUID();
+				const prompt = 'Describe Cloudflare Workers, D1, R2 and Durable Objects at length.';
+				const done = socket.waitFor(messageId);
+				await api('/api/chat/completions', {
+					method: 'POST',
+					body: JSON.stringify({
+						stream: true,
+						model: 'mock-flaky',
+						chat_id: chat.id,
+						messages: [{ role: 'user', content: prompt }],
+						id: messageId,
+						parent_id: null,
+						session_id: socket.sid,
+						user_message: {
+							id: crypto.randomUUID(),
+							parentId: null,
+							childrenIds: [],
+							role: 'user',
+							content: prompt
+						},
+						background_tasks: {}
+					})
+				});
+				const content = await done;
+
+				// The mock echoes the prompt back, so the whole answer is known and a
+				// resume that restarted instead of continuing shows as a repeat.
+				assert(content.includes(prompt), `the answer is not complete: ${JSON.stringify(content)}`);
+				const opening = 'Hello from the mock model!';
+				assert(
+					content.indexOf(opening) === content.lastIndexOf(opening),
+					`the answer restarted rather than continuing: ${JSON.stringify(content.slice(0, 160))}`
+				);
+
+				const message = await storedAnswer(chat.id);
+				assert(!message?.error, `an error was recorded anyway: ${JSON.stringify(message?.error)}`);
+
+				// The second attempt has to carry what was already written, or it is
+				// a fresh answer that happened to look similar.
+				const sent = await fetch(`${MOCK_BASE}/__recent-requests`).then((r) => r.json());
+				const withPrefill = sent.filter(
+					(request) => (request.messages ?? []).at(-1)?.role === 'assistant'
+				);
+				assert(
+					withPrefill.length >= 1,
+					`the turn was retried without what had been written: ${sent.length} requests, none carrying a prefill`
+				);
+			} finally {
+				socket.close();
+			}
+		});
+	}
+
 	await check('stop stops, and keeps what was written', async () => {
 		// This endpoint answered {status:true} and did nothing: the turn carried
 		// on, billing for every token, and overwrote the message when it finished.
 		const chat = await newChat();
 		const { socket } = await startTurn(chat.id, LONG_PROMPT);
 		try {
-			await new Promise((resolve) => setTimeout(resolve, 800));
+			// Stop the moment the turn is listed rather than after a fixed wait: a
+			// short answer against a fast model can be over inside one, and the
+			// check would then be measuring its own timing rather than the code.
+			let running = [];
+			for (let i = 0; i < 40; i += 1) {
+				running = (await api(`/api/tasks/chat/${chat.id}`)).task_ids ?? [];
+				if (running.length) break;
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			assert(running.length === 1, 'the turn was never listed as running');
+
 			const before = await storedAnswer(chat.id);
 			const stopped = await api(`/api/tasks/chat/${chat.id}/stop`, { method: 'POST' });
 			assert(
