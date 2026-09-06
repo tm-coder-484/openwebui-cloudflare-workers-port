@@ -229,17 +229,22 @@ describe('isToolsUnsupported', () => {
 });
 
 describe('searchPlan', () => {
-	it('searches before the turn in always mode, with no tools', () => {
+	it('searches before the reply whenever the switch is on', () => {
+		// The switch used to mean something different in each mode. In `tool` mode
+		// it only handed over the tools and left the model to decide, so turning
+		// it on for a question that plainly needed the web often searched nothing.
+		for (const mode of ['always', 'tool', 'combo']) {
+			expect(searchPlan(mode, true, true).preSearch).toBe(true);
+		}
+	});
+
+	it('hands the model the tools only in the modes that ask for them', () => {
 		expect(searchPlan('always', true, true)).toEqual({ preSearch: true, tools: false });
-	});
-
-	it('only offers tools in tool mode', () => {
-		expect(searchPlan('tool', true, true)).toEqual({ preSearch: false, tools: true });
-	});
-
-	it('does both in combo mode', () => {
-		// The point of combo: pages already in hand, and the option to look again.
 		expect(searchPlan('combo', true, true)).toEqual({ preSearch: true, tools: true });
+	});
+
+	it('still honours a stored `tool` mode, which now means the same as combo', () => {
+		expect(searchPlan('tool', true, true)).toEqual({ preSearch: true, tools: true });
 	});
 
 	it('falls back to searching first when tools are impossible', () => {
@@ -249,7 +254,7 @@ describe('searchPlan', () => {
 		expect(searchPlan('combo', true, false)).toEqual({ preSearch: true, tools: false });
 	});
 
-	it('does nothing at all when web search is off for the turn', () => {
+	it('does nothing at all when the switch is off', () => {
 		for (const mode of ['always', 'tool', 'combo']) {
 			expect(searchPlan(mode, false, true)).toEqual({ preSearch: false, tools: false });
 		}
@@ -258,5 +263,23 @@ describe('searchPlan', () => {
 	it('treats an unknown mode as always, not as nothing', () => {
 		expect(searchPlan('', true, true)).toEqual({ preSearch: true, tools: false });
 		expect(searchPlan('nonsense', true, true)).toEqual({ preSearch: true, tools: false });
+	});
+
+	describe('with the tools always on', () => {
+		it('offers them with the switch off, and searches nothing', () => {
+			// The point of the setting: the model can reach for a search on any
+			// turn, without the reader having predicted they would need one.
+			for (const mode of ['always', 'tool', 'combo']) {
+				expect(searchPlan(mode, false, true, true)).toEqual({ preSearch: false, tools: true });
+			}
+		});
+
+		it('adds a search before the reply once the switch is on', () => {
+			expect(searchPlan('always', true, true, true)).toEqual({ preSearch: true, tools: true });
+		});
+
+		it('offers nothing to a model that cannot call tools', () => {
+			expect(searchPlan('always', false, false, true)).toEqual({ preSearch: false, tools: false });
+		});
 	});
 });

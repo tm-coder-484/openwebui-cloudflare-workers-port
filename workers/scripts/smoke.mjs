@@ -1383,6 +1383,32 @@ if (isAdmin) {
 		}
 	});
 
+	await check('the web search setting survives a round trip', async () => {
+		// A setting the screen offers and the config store drops is the same as no
+		// setting at all, which this port has shipped more than once.
+		const before = await api('/api/v1/retrieval/config');
+		const restore = {
+			WEB_SEARCH_TOOL_ALWAYS: before.web?.WEB_SEARCH_TOOL_ALWAYS ?? false,
+			WEB_SEARCH_MODE: before.web?.WEB_SEARCH_MODE ?? 'always'
+		};
+
+		await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({ web: { ...before.web, WEB_SEARCH_TOOL_ALWAYS: true } })
+		});
+		// Read on a separate request: an echo of the input proves nothing.
+		const after = await api('/api/v1/retrieval/config');
+		assert(
+			after.web?.WEB_SEARCH_TOOL_ALWAYS === true,
+			`the setting did not persist: ${JSON.stringify(after.web?.WEB_SEARCH_TOOL_ALWAYS)}`
+		);
+
+		await api('/api/v1/retrieval/config/update', {
+			method: 'POST',
+			body: JSON.stringify({ web: { ...before.web, ...restore } })
+		});
+	});
+
 	await check('the tool settings can actually be changed', async () => {
 		// They shipped with a default and no way to set it — no key map, no
 		// environment variable, no screen.

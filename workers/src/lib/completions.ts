@@ -639,13 +639,20 @@ export async function runCompletion(
 			messages: (job.body.messages as CompletionMessage[]).map(withoutDetailBlocks)
 		};
 
-		// `always` searches once before the model runs; `tool` hands the search to
-		// the model as a function; `combo` does both, so it starts with pages in
-		// hand and can still search again for what they did not cover.
+		// The switch searches before the turn. `tool` and `combo` additionally hand
+		// the model the search tools so it can go back for what the first search
+		// missed, and `tool_always` gives it those tools on every turn whether the
+		// switch is on or not.
 		const webSearchOn = Boolean(job.body.features?.web_search);
-		const mode = String((await getConfig(env, 'web.search.mode')) ?? 'always');
+		const searchConfig = await getConfigMany(env, ['web.search.mode', 'web.search.tool_always']);
+		const mode = String(searchConfig['web.search.mode'] ?? 'always');
 		const canCallTools = resolved.workersAI !== true;
-		const plan = searchPlan(mode, webSearchOn, canCallTools);
+		const plan = searchPlan(
+			mode,
+			webSearchOn,
+			canCallTools,
+			searchConfig['web.search.tool_always'] === true
+		);
 
 		// Memory and file tools do not depend on web search being on for the turn,
 		// so the tool list is assembled from every enabled group rather than from
