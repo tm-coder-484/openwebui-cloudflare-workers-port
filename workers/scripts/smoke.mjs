@@ -73,6 +73,29 @@ await check('GET /api/version', async () => {
 	assert(version.version === config.version, 'version mismatch with /api/config');
 });
 
+await check('GET /manifest.json is installable', async () => {
+	// The bundle ships `{}` here, and a static asset would otherwise shadow the
+	// route. An empty manifest installs as an unnamed, iconless browser shim.
+	const response = await fetch(`${BASE}/manifest.json`);
+	assert(response.ok, `manifest -> ${response.status}`);
+	assert(
+		(response.headers.get('Content-Type') ?? '').includes('manifest+json'),
+		`served as ${response.headers.get('Content-Type')}`
+	);
+	const manifest = await response.json();
+	assert(manifest.name, 'no name');
+	assert(manifest.display === 'standalone', `display is ${manifest.display}`);
+	assert(manifest.start_url === '/', `start_url is ${manifest.start_url}`);
+
+	// Chrome will not offer to install without an icon of at least 192px.
+	const big = (manifest.icons ?? []).filter((icon) => parseInt(icon.sizes ?? '0', 10) >= 192);
+	assert(big.length > 0, 'no icon of 192px or more');
+	for (const icon of manifest.icons) {
+		const asset = await fetch(`${BASE}${icon.src}`);
+		assert(asset.ok, `${icon.src} -> ${asset.status}`);
+	}
+});
+
 // --- Auth -----------------------------------------------------------------
 console.log('\nauth');
 await check('sign up (or sign in) a test account', async () => {

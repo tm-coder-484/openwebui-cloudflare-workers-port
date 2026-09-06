@@ -40,6 +40,56 @@ app.get('/api/version/updates', (c) =>
 
 app.get('/api/changelog', (c) => c.json({}));
 
+/**
+ * The web app manifest.
+ *
+ * `static/manifest.json` is an empty object upstream, because upstream serves
+ * this from its backend with the deployment's own name in it. This port linked
+ * that placeholder and never wrote the route, so installing to a home screen
+ * produced an app with no name, no icons, and — because `display` was absent —
+ * none of the standalone behaviour the layout is built for.
+ *
+ * The icons and their sizes are the ones `static/static/site.webmanifest`
+ * already ships: they are drawn with a maskable safe zone, so a platform that
+ * crops to a circle or a squircle still gets the whole mark.
+ *
+ * `theme_color` follows the `<meta name="theme-color">` that `app.html` sets
+ * before hydration rather than the white in that file, so the launch screen
+ * does not flash white on the way into a dark UI.
+ */
+app.get('/manifest.json', (c) => {
+	const name = c.env.WEBUI_NAME ?? 'Open WebUI';
+	return c.json(
+		{
+			name,
+			short_name: name,
+			start_url: '/',
+			scope: '/',
+			display: 'standalone',
+			theme_color: '#171717',
+			background_color: '#171717',
+			orientation: 'any',
+			icons: [
+				{
+					src: '/static/web-app-manifest-192x192.png',
+					sizes: '192x192',
+					type: 'image/png',
+					purpose: 'maskable'
+				},
+				{
+					src: '/static/web-app-manifest-512x512.png',
+					sizes: '512x512',
+					type: 'image/png',
+					purpose: 'maskable'
+				},
+				{ src: '/static/web-app-manifest-512x512.png', sizes: '512x512', type: 'image/png' }
+			]
+		},
+		200,
+		{ 'Content-Type': 'application/manifest+json' }
+	);
+});
+
 app.get('/api/config', async (c) => {
 	const user = c.get('user');
 	const config = await getConfigMany(c.env, [
