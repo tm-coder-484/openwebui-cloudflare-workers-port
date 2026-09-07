@@ -1704,6 +1704,81 @@ if (isAdmin && searchMockUp && toolModels.includes('mock-tools')) {
 // --- Retrieval in a completion -------------------------------------------
 if (fileId && models.data?.length) {
 	console.log('\nfile context');
+	await check('an attached image reaches the model as an image', async () => {
+		// The composer uploads an image and stores the file's *id* as its `url`,
+		// and both the chat screen and the history rebuild copy that id straight
+		// into an `image_url` part. The provider was handed a bare UUID, so a
+		// vision model saw nothing — the answer came back as if no image existed.
+		//
+		// Asserting on what the mock was sent, because nothing about the reply
+		// distinguishes "read the image" from "never received one".
+		const PNG =
+			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+		const bytes = Uint8Array.from(atob(PNG), (character) => character.charCodeAt(0));
+
+		const form = new FormData();
+		form.append('file', new Blob([bytes], { type: 'image/png' }), 'dot.png');
+		const uploaded = await fetch(`${BASE}/api/v1/files/`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${token}` },
+			body: form
+		}).then((response) => response.json());
+		assert(uploaded?.id, `the image did not upload: ${JSON.stringify(uploaded).slice(0, 120)}`);
+
+		await fetch(`${MOCK_BASE}/__reset-requests`).catch(() => {});
+		await api('/api/chat/completions', {
+			method: 'POST',
+			body: JSON.stringify({
+				model: models.data[0].id,
+				stream: false,
+				messages: [
+					{
+						role: 'user',
+						content: [
+							{ type: 'text', text: 'What is in this image?' },
+							// Exactly what the composer stores for an uploaded image.
+							{ type: 'image_url', image_url: { url: `${uploaded.id}` } }
+						]
+					}
+				]
+			})
+		});
+
+		// The turn runs in the background, so the upstream request lands after the
+		// POST returns. Poll for it rather than reading once — reading once and
+		// treating an empty result as "nothing to check" is a check that passes
+		// whatever the code does, which is what the first draft of this did.
+		const imageParts = async () =>
+			fetch(`${MOCK_BASE}/__recent-requests`)
+				.then((response) => response.json())
+				.then((requests) =>
+					(Array.isArray(requests) ? requests : [])
+						.flatMap((request) => request.messages ?? [])
+						.flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+						.filter((part) => part?.type === 'image_url')
+				)
+				.catch(() => []);
+
+		let parts = [];
+		for (let attempt = 0; attempt < 40 && !parts.length; attempt++) {
+			parts = await imageParts();
+			if (!parts.length) await new Promise((resolve) => setTimeout(resolve, 250));
+		}
+		assert(parts.length > 0, 'no image part reached the model at all');
+
+		for (const part of parts) {
+			const url = String(part.image_url?.url ?? '');
+			assert(
+				url.startsWith('data:image/'),
+				`the image went upstream as a reference the provider cannot read: ${JSON.stringify(url.slice(0, 60))}`
+			);
+			assert(
+				url.includes(PNG.slice(0, 24)),
+				'the inlined bytes are not the image that was uploaded'
+			);
+		}
+	});
+
 	await check('attach a file to a completion and receive citations', async () => {
 		const socket = await connectSocket(token);
 		try {
