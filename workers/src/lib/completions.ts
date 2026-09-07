@@ -22,6 +22,7 @@ import {
 	stripThinking,
 	renderMessages
 } from './prompts';
+import { inlineImageParts } from './attachments';
 import { fullText, search } from './retrieval';
 import { resultText, webSearch } from './websearch';
 import {
@@ -637,6 +638,13 @@ export async function runCompletion(
 		job.body = {
 			...job.body,
 			messages: (job.body.messages as CompletionMessage[]).map(withoutDetailBlocks)
+		};
+
+		// An attached image is stored as a file and referenced by its id, which is
+		// not something a provider can fetch. Swap those references for the bytes.
+		job.body = {
+			...job.body,
+			messages: await inlineImageParts(env, job.body.messages as CompletionMessage[], job.userId)
 		};
 
 		// The switch searches before the turn. `tool` and `combo` additionally hand
