@@ -270,6 +270,9 @@
 		auth_type = 'bearer';
 		prefixId = '';
 		passthroughParams = '';
+		// Not reset, and the next connection added would inherit it: `init()`
+		// only refills these from an existing connection, never blanks them.
+		bodyParams = '';
 		showAdvanced = false;
 		tags = [];
 		modelIds = [];
@@ -574,9 +577,7 @@
 
 								<div class="flex gap-2 mt-2">
 									<div class="flex flex-col w-full">
-										<label for="body-params-input" class={`mb-0.5 text-xs text-gray-500`}
-											>{$i18n.t('Body parameters')}</label
-										>
+										<span class={`mb-0.5 text-xs text-gray-500`}>{$i18n.t('Body parameters')}</span>
 
 										<div class="flex-1">
 											<Tooltip
@@ -585,7 +586,7 @@
 												)}
 											>
 												<Textarea
-													id="body-params-input"
+													ariaLabel={$i18n.t('Body parameters')}
 													className="w-full text-sm outline-hidden"
 													bind:value={bodyParams}
 													placeholder={$i18n.t(
