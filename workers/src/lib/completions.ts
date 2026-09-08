@@ -197,6 +197,11 @@ export function buildUpstreamRequest(
 				'Add one under Admin Settings → Connections, or enable Workers AI.'
 		);
 	}
+	// Anything the connection always wants in the body — OpenRouter's `provider`
+	// routing block is the reason this exists, but it is deliberately untyped:
+	// every gateway has its own extras and none of them are in the OpenAI spec.
+	applyBodyParams(payload, connection.config?.body_params);
+
 	return {
 		kind: 'openai',
 		url: `${connection.url}/chat/completions`,
@@ -209,6 +214,30 @@ export function buildUpstreamRequest(
 		payload,
 		...(connection.fallbackKeys?.length ? { fallbackKeys: connection.fallbackKeys } : {})
 	};
+}
+
+/**
+ * Keys the engine owns. A connection-level default must not be able to change
+ * which model answers, what it is asked, or how the reply is read back — a
+ * `stream` or `messages` set here would break the turn rather than configure it.
+ */
+const ENGINE_OWNED = new Set([
+	'model',
+	'messages',
+	'stream',
+	'stream_options',
+	'tools',
+	'tool_choice'
+]);
+
+/** Merges a connection's standing body parameters into one request. */
+export function applyBodyParams(payload: Record<string, any>, bodyParams: unknown): void {
+	if (!bodyParams || typeof bodyParams !== 'object' || Array.isArray(bodyParams)) return;
+	for (const [key, value] of Object.entries(bodyParams as Record<string, unknown>)) {
+		if (ENGINE_OWNED.has(key)) continue;
+		if (value === undefined) continue;
+		payload[key] = value;
+	}
 }
 
 /** `{{USER_NAME}}`-style placeholders the frontend sends in `variables`. */
