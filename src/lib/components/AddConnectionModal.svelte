@@ -50,6 +50,7 @@
 	let apiType = ''; // '' = chat completions (default), 'responses' = Responses API
 
 	let headers = '';
+	let bodyParams = '';
 	let passthroughParams = '';
 
 	let tags = [];
@@ -88,6 +89,23 @@
 		}
 	};
 
+	/**
+	 * Standing body parameters for this connection, as a JSON object.
+	 *
+	 * OpenRouter's provider routing lives here — `{"provider": {"order": [...]}}`
+	 * — but nothing about this is OpenRouter-specific: every gateway has extras
+	 * that are not in the OpenAI request schema and had no way in before.
+	 */
+	const parseBodyParams = () => {
+		if (!bodyParams.trim()) return null;
+		const parsed = JSON.parse(bodyParams);
+		if (typeof parsed !== 'object' || Array.isArray(parsed) || parsed === null) {
+			throw new Error('Body parameters must be a valid JSON object');
+		}
+		bodyParams = JSON.stringify(parsed, null, 2);
+		return parsed;
+	};
+
 	const verifyOpenAIHandler = async () => {
 		// remove trailing slash from url
 		url = url.replace(/\/$/, '');
@@ -108,6 +126,14 @@
 			}
 		}
 
+		let _bodyParams = null;
+		try {
+			_bodyParams = parseBodyParams();
+		} catch (error) {
+			toast.error($i18n.t('Body parameters must be a valid JSON object'));
+			return;
+		}
+
 		const res = await verifyOpenAIConnection(
 			localStorage.token,
 			{
@@ -119,7 +145,8 @@
 					...(azure ? { azure: true } : {}),
 					api_version: apiVersion,
 					passthrough_params: parsePassthroughParams(passthroughParams),
-					...(_headers ? { headers: _headers } : {})
+					...(_headers ? { headers: _headers } : {}),
+					...(_bodyParams ? { body_params: _bodyParams } : {})
 				}
 			},
 			direct
@@ -202,6 +229,14 @@
 			}
 		}
 
+		let _bodyParams = null;
+		try {
+			_bodyParams = parseBodyParams();
+		} catch (error) {
+			toast.error($i18n.t('Body parameters must be a valid JSON object'));
+			return;
+		}
+
 		// remove trailing slash from url
 		url = url.replace(/\/$/, '');
 
@@ -216,6 +251,7 @@
 				connection_type: connectionType,
 				auth_type,
 				headers: headers ? JSON.parse(headers) : undefined,
+				body_params: _bodyParams ?? undefined,
 				passthrough_params: parsePassthroughParams(passthroughParams),
 				...(provider ? { provider } : {}),
 				...(!ollama && azure ? { azure: true } : {}),
@@ -234,6 +270,9 @@
 		auth_type = 'bearer';
 		prefixId = '';
 		passthroughParams = '';
+		// Not reset, and the next connection added would inherit it: `init()`
+		// only refills these from an existing connection, never blanks them.
+		bodyParams = '';
 		showAdvanced = false;
 		tags = [];
 		modelIds = [];
@@ -245,6 +284,9 @@
 			key = connection.key;
 
 			auth_type = connection.config.auth_type ?? 'bearer';
+			bodyParams = connection.config?.body_params
+				? JSON.stringify(connection.config.body_params, null, 2)
+				: '';
 			headers = connection.config?.headers
 				? JSON.stringify(connection.config.headers, null, 2)
 				: '';
@@ -525,6 +567,31 @@
 													className="w-full text-sm outline-hidden"
 													bind:value={headers}
 													placeholder={$i18n.t('Enter additional headers in JSON format')}
+													required={false}
+													minSize={30}
+												/>
+											</Tooltip>
+										</div>
+									</div>
+								</div>
+
+								<div class="flex gap-2 mt-2">
+									<div class="flex flex-col w-full">
+										<span class={`mb-0.5 text-xs text-gray-500`}>{$i18n.t('Body parameters')}</span>
+
+										<div class="flex-1">
+											<Tooltip
+												content={$i18n.t(
+													'Sent with every request to this connection. On OpenRouter this is where provider routing goes, e.g. {"provider": {"order": ["Anthropic"], "allow_fallbacks": false}}'
+												)}
+											>
+												<Textarea
+													ariaLabel={$i18n.t('Body parameters')}
+													className="w-full text-sm outline-hidden"
+													bind:value={bodyParams}
+													placeholder={$i18n.t(
+														'Extra request body fields in JSON format, e.g. {"provider": {"order": ["Anthropic"]}}'
+													)}
 													required={false}
 													minSize={30}
 												/>
